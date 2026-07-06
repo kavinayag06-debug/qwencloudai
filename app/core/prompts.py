@@ -99,6 +99,72 @@ Requirements:
 Generate ONLY the complete HTML code, no explanation.
 """
 
+DESIGN_PLAN_PROMPT = """You are planning a landing page redesign for a real local business. Do not use generic filler.
+
+Business: {company_name}
+Industry: {industry}
+Location: {location}
+Address: {address}
+Phone: {phone}
+Current website problems: {design_problems}
+
+Style direction:
+- Colors: {color_palette}
+- Typography: {typography}
+- Layout style: {layout_style}
+- Mood: {mood}
+
+Produce a concrete content brief for this specific business (not a generic template). Every service/highlight
+must be plausible and specific to this industry and business name, not placeholder text like "Quality Service".
+If a testimonial is included, it must be clearly labeled as a sample/placeholder, never presented as a real quote.
+
+Respond in JSON format:
+{{
+    "headline": "specific hero headline",
+    "subheadline": "one sentence supporting the headline",
+    "sections": ["hero", "..."],
+    "highlights": [{{"title": "...", "description": "specific, non-generic description"}}],
+    "cta_text": "specific call to action",
+    "testimonial_placeholder": "sample quote text, clearly a placeholder",
+    "meta_description": "SEO meta description under 160 chars"
+}}
+"""
+
+HTML_CRITIQUE_PROMPT = """You are a critical design reviewer for a web agency. Review this generated landing page HTML
+for {company_name} ({industry}) against commercial-quality standards. Be strict — this will be sent to a real
+prospective client as a sample of our work.
+
+HTML:
+{html_content}
+
+Check specifically for:
+1. Generic filler copy that could apply to any business (bad) vs. specific, plausible content (good)
+2. A testimonial presented as a real quote without being marked as a sample (bad)
+3. Missing <title> or meta description (bad)
+4. Missing viewport meta tag or non-responsive layout (bad)
+5. Dead or fabricated links (e.g. guessed email addresses, href="#") (bad)
+6. Layout/section structure generic-looking rather than tailored to the industry (bad)
+
+Respond in JSON format:
+{{
+    "score": 0-100,
+    "issues": ["specific issue 1", "specific issue 2", ...],
+    "passed": true/false
+}}
+"""
+
+HTML_REVISION_PROMPT = """Revise the following HTML landing page to fix the listed issues. Keep everything that
+already works well. Output the complete corrected HTML file only, no explanation.
+
+Business: {company_name}
+
+Current HTML:
+{html_content}
+
+Issues to fix:
+{issues}
+"""
+
 EMAIL_DRAFT_PROMPT = """Write a professional outreach email to a business owner about redesigning their website.
 
 Business: {company_name}

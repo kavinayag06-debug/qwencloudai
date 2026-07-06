@@ -8,15 +8,26 @@ For each shortlisted client:
 """
 
 import logging
-from pathlib import Path
 
 from app.config import get_settings
 from app.core.llm_provider import get_llm_provider
 from app.core.models import Lead, LeadStatus, StyleTraits
-from app.core.prompts import HTML_GENERATION_PROMPT
+from app.core.prompts import (
+    HTML_GENERATION_PROMPT,
+    DESIGN_PLAN_PROMPT,
+    HTML_CRITIQUE_PROMPT,
+    HTML_REVISION_PROMPT,
+)
+from app.core.scoring import compute_confidence
 from app.storage.database import get_database
 
 logger = logging.getLogger(__name__)
+
+# Quality bar a generated design must clear to skip further revision rounds.
+QUALITY_THRESHOLD = 75
+# Build once, revise at most this many times. ponytail: bounded loop keeps LLM cost
+# predictable; raise if the critic keeps failing designs that a human would pass.
+MAX_REVISIONS = 1
 
 # Industry-specific design presets
 INDUSTRY_PRESETS = {
@@ -108,55 +119,50 @@ class HTMLGenerator:
     """Generates HTML landing pages based on analysis and style traits."""
 
     async def generate(self, lead: Lead, style_traits: StyleTraits) -> Lead:
-        """Generate an HTML landing page for the lead."""
+        """Generate an HTML landing page for the lead via a plan -> build -> critique -> revise loop."""
         logger.info(f"Generating HTML for {lead.company_name}")
         lead.add_log("Starting HTML generation")
 
-        # Prepare prompt
-        design_problems = ", ".join(
-            lead.website_analysis.design_problems if lead.website_analysis else ["outdated design"]
-        )
-
-        prompt = HTML_GENERATION_PROMPT.format(
-            company_name=lead.company_name,
-            industry=lead.industry,
-            location=lead.location,
-            design_problems=design_problems,
-            color_palette=", ".join(style_traits.color_palette) if style_traits.color_palette else "use industry-appropriate colors",
-            typography=style_traits.typography or "modern sans-serif",
-            layout_style=style_traits.layout_style or "clean minimalist",
-            mood=style_traits.mood or "professional",
-            design_patterns=", ".join(style_traits.design_patterns) if style_traits.design_patterns else "hero section, card grid, testimonials, CTA",
-        )
-
-        # Generate HTML via LLM
         llm = get_llm_provider()
+        quality_score = 0
+
         try:
-            response = await llm.complete(
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=8192,
-            )
+            brief = await self._plan(llm, lead, style_traits)
 
-            html_content = response.content.strip()
+            html_content = await self._build(llm, lead, style_traits, brief)
+            best_html = html_content if self._looks_like_html(html_content) else None
+            best_score = -1
 
-            # Clean up if wrapped in code blocks
-            if html_content.startswith("```"):
-                lines = html_content.split("\n")
-                lines = lines[1:]  # Remove opening ```html
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                html_content = "\n".join(lines)
+            for round_num in range(MAX_REVISIONS + 1):
+                if not self._looks_like_html(html_content):
+                    break
 
-            # Validate it's real HTML
-            if not html_content.strip().startswith("<!DOCTYPE") and not html_content.strip().lower().startswith("<html"):
+                critique = await self._critique(llm, lead, html_content)
+                score = int(critique.get("score", 0))
+                issues = critique.get("issues", [])
+                lead.add_log(f"Design critique round {round_num + 1}: score={score}, issues={len(issues)}")
+
+                if score > best_score:
+                    best_score, best_html = score, html_content
+
+                if score >= QUALITY_THRESHOLD or not issues or round_num == MAX_REVISIONS:
+                    break
+
+                html_content = await self._revise(llm, lead, html_content, issues)
+
+            if best_html is None:
                 logger.warning("LLM did not return valid HTML, using industry-specific fallback")
                 html_content = self._generate_fallback_html(lead, style_traits)
+                quality_score = 50  # fallback is a known-decent static template, not critic-scored
+            else:
+                html_content = best_html
+                quality_score = max(best_score, 0)
 
         except Exception as e:
             logger.error(f"HTML generation failed: {e}")
             lead.add_log(f"HTML generation failed: {str(e)}")
             html_content = self._generate_fallback_html(lead, style_traits)
+            quality_score = 50
 
         # Save HTML file
         settings = get_settings()
@@ -167,13 +173,128 @@ class HTMLGenerator:
         html_path.write_text(html_content, encoding="utf-8")
 
         lead.html_path = str(html_path)
+        lead.html_quality_score = quality_score
         lead.status = LeadStatus.REDESIGN_GENERATED
-        lead.add_log(f"HTML saved to {html_path}")
+        lead.add_log(f"HTML saved to {html_path} (quality_score={quality_score})")
+
+        # Feed the critic's real score back into confidence/routing instead of a flat guess
+        if lead.website_analysis:
+            lead.confidence = compute_confidence(
+                analysis=lead.website_analysis,
+                style_traits=style_traits,
+                industry=lead.industry,
+                html_generated=True,
+                email_drafted=bool(lead.email_body),
+                html_quality_score=quality_score,
+            )
 
         # Save
         db = get_database()
         db.save_lead(lead)
         return lead
+
+    async def _plan(self, llm, lead: Lead, style_traits: StyleTraits) -> dict:
+        """Planner step: produce a business-specific content brief before any HTML is written."""
+        design_problems = ", ".join(
+            lead.website_analysis.design_problems if lead.website_analysis else ["outdated design"]
+        )
+        prompt = DESIGN_PLAN_PROMPT.format(
+            company_name=lead.company_name,
+            industry=lead.industry,
+            location=lead.location,
+            address=lead.address or lead.location,
+            phone=lead.phone or "not provided",
+            design_problems=design_problems,
+            color_palette=", ".join(style_traits.color_palette) if style_traits.color_palette else "use industry-appropriate colors",
+            typography=style_traits.typography or "modern sans-serif",
+            layout_style=style_traits.layout_style or "clean minimalist",
+            mood=style_traits.mood or "professional",
+        )
+        response = await llm.complete(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.6,
+            json_mode=True,
+        )
+        try:
+            return response.as_json()
+        except Exception:
+            return {}
+
+    async def _build(self, llm, lead: Lead, style_traits: StyleTraits, brief: dict) -> str:
+        """Builder step: generate the HTML, informed by the planner's brief."""
+        design_problems = ", ".join(
+            lead.website_analysis.design_problems if lead.website_analysis else ["outdated design"]
+        )
+        design_patterns = list(style_traits.design_patterns or [])
+        if brief.get("sections"):
+            design_patterns = brief["sections"]
+
+        prompt = HTML_GENERATION_PROMPT.format(
+            company_name=lead.company_name,
+            industry=lead.industry,
+            location=lead.location,
+            design_problems=design_problems,
+            color_palette=", ".join(style_traits.color_palette) if style_traits.color_palette else "use industry-appropriate colors",
+            typography=style_traits.typography or "modern sans-serif",
+            layout_style=style_traits.layout_style or "clean minimalist",
+            mood=style_traits.mood or "professional",
+            design_patterns=", ".join(design_patterns) if design_patterns else "hero section, card grid, testimonials, CTA",
+        )
+        if brief:
+            prompt += f"\n\nContent brief to follow (use this specific content, not generic filler):\n{brief}"
+
+        response = await llm.complete(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=8192,
+        )
+        return self._strip_code_fence(response.content)
+
+    async def _critique(self, llm, lead: Lead, html_content: str) -> dict:
+        """Critic step: score the generated HTML against commercial-quality standards."""
+        prompt = HTML_CRITIQUE_PROMPT.format(
+            company_name=lead.company_name,
+            industry=lead.industry,
+            html_content=html_content,
+        )
+        response = await llm.complete(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            json_mode=True,
+        )
+        try:
+            return response.as_json()
+        except Exception:
+            return {"score": 0, "issues": [], "passed": False}
+
+    async def _revise(self, llm, lead: Lead, html_content: str, issues: list) -> str:
+        """Revision step: fix the specific issues the critic raised."""
+        prompt = HTML_REVISION_PROMPT.format(
+            company_name=lead.company_name,
+            html_content=html_content,
+            issues="\n".join(f"- {issue}" for issue in issues),
+        )
+        response = await llm.complete(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5,
+            max_tokens=8192,
+        )
+        return self._strip_code_fence(response.content)
+
+    @staticmethod
+    def _strip_code_fence(content: str) -> str:
+        content = content.strip()
+        if content.startswith("```"):
+            lines = content.split("\n")[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            content = "\n".join(lines)
+        return content.strip()
+
+    @staticmethod
+    def _looks_like_html(content: str) -> bool:
+        lowered = content.strip().lower()
+        return lowered.startswith("<!doctype") or lowered.startswith("<html")
 
     def _generate_fallback_html(self, lead: Lead, style_traits: StyleTraits) -> str:
         """Generate industry-specific fallback HTML."""
