@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <a href="/" class="back-link">&larr; Back to Dashboard</a>
+    <h1>{{ lead.company_name }}</h1>
+    <span class="badge badge-{{ lead.status.value }}">{{ lead.status.value }}</span>
+</div>
+
+<div class="detail-grid">
+    <!-- Company Info -->
+    <section class="card">
+        <h2>Company Info</h2>
+        <dl>
+            <dt>Industry</dt><dd>{{ lead.industry }}</dd>
+            <dt>Location</dt><dd>{{ lead.location }}</dd>
+            <dt>Address</dt><dd>{{ lead.address or '-' }}</dd>
+            <dt>Phone</dt><dd>{{ lead.phone or '-' }}</dd>
+            <dt>Website</dt>
+            <dd>
+                {% if lead.website_url %}
+                <a href="{{ lead.website_url }}" target="_blank">{{ lead.website_url }}</a>
+                {% else %}-{% endif %}
+            </dd>
+            <dt>Source</dt><dd>{{ lead.discovery_source }}</dd>
+        </dl>
+    </section>
+
+    <!-- Confidence Score -->
+    <section class="card">
+        <h2>Confidence Score</h2>
+        {% if lead.confidence %}
+        <div class="score-display">
+            <span class="score-big confidence-{{ lead.confidence.level.value }}">
+                {{ lead.confidence.overall }}
+            </span>
+            <span class="score-label">/ 100 ({{ lead.confidence.level.value }})</span>
+        </div>
+        <dl class="score-breakdown">
+            <dt>Website Weakness</dt><dd>{{ lead.confidence.website_weakness }}</dd>
+            <dt>Style Fit</dt><dd>{{ lead.confidence.style_fit }}</dd>
+            <dt>Industry Match</dt><dd>{{ lead.confidence.industry_match }}</dd>
+            <dt>Opportunity Clarity</dt><dd>{{ lead.confidence.opportunity_clarity }}</dd>
+            <dt>HTML Quality</dt><dd>{{ lead.confidence.html_quality }}</dd>
+            <dt>Outreach Confidence</dt><dd>{{ lead.confidence.outreach_confidence }}</dd>
+        </dl>
+        {% else %}
+        <p>Not yet scored.</p>
+        {% endif %}
+    </section>
+
+    <!-- Website Analysis -->
+    <section class="card">
+        <h2>Website Analysis</h2>
+        {% if lead.website_analysis %}
+        <dl>
+            <dt>Modernity</dt><dd>{{ lead.website_analysis.modernity_score }}/100 - {{ lead.website_analysis.visual_age }}</dd>
+            <dt>Responsiveness</dt><dd>{{ lead.website_analysis.responsiveness_score }}/100</dd>
+            <dt>Content Clarity</dt><dd>{{ lead.website_analysis.content_clarity_score }}/100</dd>
+            <dt>CTA Quality</dt><dd>{{ lead.website_analysis.cta_score }}/100</dd>
+            <dt>Trust Signals</dt><dd>{{ lead.website_analysis.trust_score }}/100</dd>
+            <dt>Mobile</dt><dd>{{ lead.website_analysis.mobile_score }}/100</dd>
+            <dt>Overall Weakness</dt><dd>{{ lead.website_analysis.overall_weakness_score }}/100</dd>
+        </dl>
+        {% if lead.website_analysis.design_problems %}
+        <h3>Design Problems</h3>
+        <ul>
+            {% for problem in lead.website_analysis.design_problems %}
+            <li>{{ problem }}</li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        <p><strong>Summary:</strong> {{ lead.website_analysis.summary }}</p>
+        {% else %}
+        <p>Not yet analyzed.</p>
+        {% endif %}
+    </section>
+
+    <!-- Style Reference -->
+    <section class="card">
+        <h2>Style Reference</h2>
+        {% if lead.style_traits %}
+        <dl>
+            <dt>Mood</dt><dd>{{ lead.style_traits.mood }}</dd>
+            <dt>Typography</dt><dd>{{ lead.style_traits.typography }}</dd>
+            <dt>Layout</dt><dd>{{ lead.style_traits.layout_style }}</dd>
+            <dt>Colors</dt>
+            <dd>
+                {% for color in lead.style_traits.color_palette %}
+                <span class="color-swatch" style="background:{{ color }};" title="{{ color }}"></span>
+                {% endfor %}
+            </dd>
+            <dt>Patterns</dt><dd>{{ lead.style_traits.design_patterns | join(', ') }}</dd>
+        </dl>
+        {% else %}
+        <p>No style analysis yet.</p>
+        {% endif %}
+    </section>
+
+    <!-- Screenshots -->
+    <section class="card">
+        <h2>Generated Screenshots</h2>
+        {% if lead.screenshot_paths %}
+        <div class="screenshot-grid">
+            {% for ss in lead.screenshot_paths %}
+            <div class="screenshot-item">
+                <img src="/leads/{{ lead.id }}/screenshot/{{ ss.split('\\')[-1].split('/')[-1] }}" alt="Screenshot">
+                <small>{{ ss.split('\\')[-1].split('/')[-1] }}</small>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p>No screenshots yet.</p>
+        {% endif %}
+
+        {% if lead.html_path %}
+        <div class="actions" style="margin-top:1rem;">
+            <a href="/leads/{{ lead.id }}/preview" class="btn btn-secondary" target="_blank">Preview HTML</a>
+            {% if lead.zip_path %}
+            <a href="/leads/{{ lead.id }}/download" class="btn btn-secondary">Download Zip</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </section>
+
+    <!-- Email Draft -->
+    <section class="card">
+        <h2>Email Draft</h2>
+        {% if lead.email_subject %}
+        <div class="email-preview">
+            <p><strong>Subject:</strong> {{ lead.email_subject }}</p>
+            <pre class="email-body">{{ lead.email_body }}</pre>
+        </div>
+
+        {% if lead.status.value == 'pending_approval' %}
+        <div class="approval-controls">
+            <form method="post" action="/leads/{{ lead.id }}/approve" style="display:inline;">
+                <button type="submit" class="btn btn-success">Approve & Send</button>
+            </form>
+            <form method="post" action="/leads/{{ lead.id }}/reject" style="display:inline;">
+                <button type="submit" class="btn btn-danger">Reject</button>
+            </form>
+        </div>
+        {% elif lead.status.value == 'approved' %}
+        <p class="status-msg success">✓ Approved</p>
+        {% elif lead.status.value == 'sent' %}
+        <p class="status-msg success">✓ Sent</p>
+        {% elif lead.status.value == 'rejected' %}
+        <p class="status-msg danger">✗ Rejected</p>
+        {% endif %}
+        {% else %}
+        <p>No email drafted yet.</p>
+        {% endif %}
+    </section>
+
+    <!-- Logs -->
+    <section class="card">
+        <h2>Activity Log</h2>
+        {% if lead.logs %}
+        <ul class="log-list">
+            {% for log in lead.logs %}
+            <li>{{ log }}</li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p>No logs yet.</p>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

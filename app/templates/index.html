@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Redesign Agent Dashboard</h1>
+    <div class="actions">
+        <form method="post" action="/run-discovery" style="display:inline;">
+            <button type="submit" class="btn btn-secondary">Run Discovery</button>
+        </form>
+        <form method="post" action="/run-pipeline" style="display:inline;">
+            <button type="submit" class="btn btn-primary">Run Full Pipeline</button>
+        </form>
+    </div>
+</div>
+
+{% if leads %}
+<table class="leads-table">
+    <thead>
+        <tr>
+            <th>Company</th>
+            <th>Industry</th>
+            <th>Location</th>
+            <th>Status</th>
+            <th>Confidence</th>
+            <th>Score</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for lead in leads %}
+        <tr class="status-{{ lead.status.value }}">
+            <td>
+                <a href="/leads/{{ lead.id }}">{{ lead.company_name }}</a>
+                {% if lead.website_url %}
+                <br><small class="url">{{ lead.website_url[:40] }}...</small>
+                {% endif %}
+            </td>
+            <td>{{ lead.industry }}</td>
+            <td>{{ lead.location }}</td>
+            <td><span class="badge badge-{{ lead.status.value }}">{{ lead.status.value }}</span></td>
+            <td>
+                {% if lead.confidence %}
+                <span class="confidence confidence-{{ lead.confidence.level.value }}">
+                    {{ lead.confidence.level.value }}
+                </span>
+                {% else %}
+                <span class="confidence">-</span>
+                {% endif %}
+            </td>
+            <td>{{ lead.confidence.overall if lead.confidence else '-' }}</td>
+            <td>
+                <a href="/leads/{{ lead.id }}" class="btn btn-small">View</a>
+                {% if lead.html_path %}
+                <a href="/leads/{{ lead.id }}/preview" class="btn btn-small" target="_blank">Preview</a>
+                {% endif %}
+                {% if lead.zip_path %}
+                <a href="/leads/{{ lead.id }}/download" class="btn btn-small">Download</a>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="empty-state">
+    <h2>No leads yet</h2>
+    <p>Click "Run Full Pipeline" to discover businesses and generate redesign proposals.</p>
+</div>
+{% endif %}
+{% endblock %}

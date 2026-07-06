@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page-header">
+    <h1>System Logs</h1>
+</div>
+
+{% if logs %}
+<table class="leads-table">
+    <thead>
+        <tr>
+            <th>Company</th>
+            <th>Log Entry</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for entry in logs %}
+        <tr>
+            <td><a href="/leads/{{ entry.id }}">{{ entry.company }}</a></td>
+            <td><code>{{ entry.log }}</code></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="empty-state">
+    <p>No logs yet. Run the pipeline to generate activity.</p>
+</div>
+{% endif %}
+{% endblock %}
