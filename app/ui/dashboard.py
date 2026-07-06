@@ -167,13 +167,18 @@ async def serve_screenshot(lead_id: str, filename: str):
 
 @router.get("/logs", response_class=HTMLResponse)
 async def logs_page(request: Request):
-    """View all logs."""
+    """View all logs - one entry per lead with latest status."""
     db = get_database()
     leads = db.get_all_leads()
     all_logs = []
     for lead in leads:
-        for log_entry in lead.logs:
-            all_logs.append({"company": lead.company_name, "id": lead.id, "log": log_entry})
+        latest_log = lead.logs[-1] if lead.logs else "No activity"
+        all_logs.append({
+            "company": lead.company_name,
+            "id": lead.id,
+            "status": lead.status.value,
+            "latest_log": latest_log,
+        })
 
     return _render(request, "logs.html", {
         "logs": all_logs,

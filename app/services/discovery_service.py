@@ -122,6 +122,27 @@ class DiscoveryService:
         leads = []
         db = get_database()
         for result in candidates[:request.max_results]:
+            # Check if lead already exists by website URL or company name
+            existing_leads = db.get_all_leads()
+            already_exists = any(
+                (el.website_url == result.website_url and result.website_url)
+                or el.company_name.lower() == result.company_name.lower()
+                for el in existing_leads
+            )
+            if already_exists:
+                # Find and reuse existing lead
+                existing = next(
+                    (el for el in existing_leads
+                     if (el.website_url == result.website_url and result.website_url)
+                     or el.company_name.lower() == result.company_name.lower()),
+                    None,
+                )
+                if existing:
+                    existing.add_log(f"Re-discovered via {result.source}")
+                    db.save_lead(existing)
+                    leads.append(existing)
+                continue
+
             lead = Lead(
                 company_name=result.company_name,
                 website_url=result.website_url,

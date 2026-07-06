@@ -46,8 +46,8 @@ class ExaConnector(BaseConnector):
                 search_results = exa.search(
                     query,
                     num_results=max_results // len(categories[:5]),
-                    use_autoprompt=True,
                     type="neural",
+                    category="company",
                 )
 
                 for item in search_results.results:

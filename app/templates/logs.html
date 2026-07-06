@@ -10,14 +10,16 @@
     <thead>
         <tr>
             <th>Company</th>
-            <th>Log Entry</th>
+            <th>Status</th>
+            <th>Latest Activity</th>
         </tr>
     </thead>
     <tbody>
         {% for entry in logs %}
         <tr>
             <td><a href="/leads/{{ entry.id }}">{{ entry.company }}</a></td>
-            <td><code>{{ entry.log }}</code></td>
+            <td><span class="badge badge-{{ entry.status }}">{{ entry.status }}</span></td>
+            <td><code>{{ entry.latest_log }}</code></td>
         </tr>
         {% endfor %}
     </tbody>

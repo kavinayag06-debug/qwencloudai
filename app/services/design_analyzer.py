@@ -92,25 +92,54 @@ class DesignAnalyzer:
         if not traits_list:
             return StyleTraits()
 
+        # Normalize: some models return {"style_traits": {...}} or direct traits
+        normalized = []
+        for t in traits_list:
+            if isinstance(t, dict):
+                # If wrapped in a key like "style_traits", unwrap it
+                if "style_traits" in t and isinstance(t["style_traits"], dict):
+                    normalized.append(t["style_traits"])
+                elif "color_palette" in t:
+                    normalized.append(t)
+                else:
+                    # Try to find the first dict value that looks like traits
+                    for v in t.values():
+                        if isinstance(v, dict) and "color_palette" in v:
+                            normalized.append(v)
+                            break
+                    else:
+                        normalized.append(t)
+            else:
+                continue
+
+        if not normalized:
+            return StyleTraits()
+
         # Merge color palettes (deduplicate)
         all_colors = []
-        for t in traits_list:
-            all_colors.extend(t.get("color_palette", []))
+        for t in normalized:
+            colors = t.get("color_palette", [])
+            if isinstance(colors, list):
+                all_colors.extend(colors)
         unique_colors = list(dict.fromkeys(all_colors))[:8]
 
         # Take most common traits
         all_patterns = []
-        for t in traits_list:
-            all_patterns.extend(t.get("design_patterns", []))
+        for t in normalized:
+            patterns = t.get("design_patterns", [])
+            if isinstance(patterns, list):
+                all_patterns.extend(patterns)
         unique_patterns = list(dict.fromkeys(all_patterns))[:10]
 
         all_industries = []
-        for t in traits_list:
-            all_industries.extend(t.get("industry_fit", []))
+        for t in normalized:
+            industries = t.get("industry_fit", [])
+            if isinstance(industries, list):
+                all_industries.extend(industries)
         unique_industries = list(dict.fromkeys(all_industries))[:10]
 
         # Use the last analysis for text fields (most representative)
-        last = traits_list[-1]
+        last = normalized[-1]
 
         return StyleTraits(
             color_palette=unique_colors,
@@ -119,7 +148,7 @@ class DesignAnalyzer:
             mood=last.get("mood", "professional"),
             industry_fit=unique_industries,
             design_patterns=unique_patterns,
-            quality_score=int(sum(t.get("quality_score", 70) for t in traits_list) / len(traits_list)),
+            quality_score=int(sum(t.get("quality_score", 70) for t in normalized) / len(normalized)),
         )
 
     def get_traits_for_industry(self, industry: str) -> StyleTraits:
