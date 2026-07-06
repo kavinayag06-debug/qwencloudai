@@ -92,8 +92,27 @@ class EmailService:
             db.save_lead(lead)
             return lead
 
-        # Force recipient to the configured client email
-        recipient = "xxpotatoot@gmail.com"
+        if settings.mail_dry_run:
+            if not settings.dry_run_recipient:
+                logger.error("MAIL_DRY_RUN is enabled but DRY_RUN_RECIPIENT is not configured")
+                lead.add_log("Email sending failed: MAIL_DRY_RUN enabled but no DRY_RUN_RECIPIENT configured")
+                db = get_database()
+                db.save_lead(lead)
+                return lead
+            recipient = settings.dry_run_recipient
+            logger.info(
+                f"MAIL_DRY_RUN enabled: redirecting email intended for {lead.email!r} "
+                f"to dry-run recipient {recipient!r}"
+            )
+            lead.add_log(f"Dry-run: email redirected to {recipient} (intended recipient: {lead.email or '(none)'})")
+        else:
+            if not lead.email:
+                logger.error(f"Cannot send email for lead {lead.company_name!r}: lead.email is empty")
+                lead.add_log("Email sending failed: lead has no email address on file")
+                db = get_database()
+                db.save_lead(lead)
+                return lead
+            recipient = lead.email
 
         try:
             msg = MIMEMultipart()

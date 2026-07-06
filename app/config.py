@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     smtp_password: str = Field(default="", alias="SMTP_PASSWORD")
     email_from_name: str = Field(default="", alias="EMAIL_FROM_NAME")
     email_from_address: str = Field(default="", alias="EMAIL_FROM_ADDRESS")
+    mail_dry_run: bool = Field(default=True, alias="MAIL_DRY_RUN")
+    dry_run_recipient: str = Field(default="", alias="DRY_RUN_RECIPIENT")
 
     # App
     app_host: str = Field(default="127.0.0.1", alias="APP_HOST")
