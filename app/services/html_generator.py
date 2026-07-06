@@ -8,7 +8,6 @@ For each shortlisted client:
 """
 
 import logging
-from pathlib import Path
 
 from app.config import get_settings
 from app.core.llm_provider import get_llm_provider

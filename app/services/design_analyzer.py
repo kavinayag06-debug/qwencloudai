@@ -6,7 +6,6 @@ and builds a style profile for HTML generation.
 """
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 from app.config import get_settings
