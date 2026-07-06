@@ -19,6 +19,7 @@ from app.config import get_settings
 from app.core.llm_provider import get_llm_provider
 from app.core.models import Lead, LeadStatus
 from app.core.prompts import EMAIL_DRAFT_PROMPT
+from app.core.scoring import compute_confidence
 from app.storage.database import get_database
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,16 @@ class EmailService:
 
         lead.status = LeadStatus.PENDING_APPROVAL
         lead.add_log("Email draft ready for approval")
+
+        # Recompute confidence now that outreach_confidence can be scored
+        if lead.website_analysis:
+            lead.confidence = compute_confidence(
+                analysis=lead.website_analysis,
+                style_traits=lead.style_traits,
+                industry=lead.industry,
+                html_generated=bool(lead.html_path),
+                email_drafted=True,
+            )
 
         db = get_database()
         db.save_lead(lead)
