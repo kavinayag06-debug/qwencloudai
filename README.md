@@ -40,6 +40,13 @@ copy .env.example .env
 # Edit .env with your API keys (or leave as mock for testing)
 ```
 
+> **Note:** `.env` is machine-local (gitignored) — every teammate must copy
+> `.env.example` to `.env` and set their own `LLM_PROVIDER` and `LLM_API_KEY`
+> to get real AI-generated redesigns. With `LLM_PROVIDER=mock` or a missing/
+> placeholder API key, the app still runs but every redesign is a generic
+> non-AI fallback template, and the logs warn loudly about it
+> ("AI NOT CONFIGURED").
+
 ### 3. Add design references (optional)
 
 Place your past design screenshots (PNG, JPG, WebP) in:

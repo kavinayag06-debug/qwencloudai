@@ -10,9 +10,14 @@ For each shortlisted client:
 import logging
 
 from app.config import get_settings
-from app.core.llm_provider import get_llm_provider
+from app.core.llm_provider import get_llm_provider, llm_unconfigured_reason
 from app.core.models import Lead, LeadStatus, StyleTraits
-from app.core.prompts import HTML_GENERATION_PROMPT
+from app.core.prompts import (
+    DESIGN_PLAN_PROMPT,
+    HTML_CRITIQUE_PROMPT,
+    HTML_GENERATION_PROMPT,
+    HTML_REVISION_PROMPT,
+)
 from app.core.scoring import compute_confidence
 from app.storage.database import get_database
 
@@ -121,6 +126,15 @@ class HTMLGenerator:
         llm = get_llm_provider()
         quality_score = 0
 
+        unconfigured_reason = llm_unconfigured_reason()
+        if unconfigured_reason:
+            logger.warning(f"AI NOT CONFIGURED — output will not be real AI: {unconfigured_reason}")
+            lead.add_log(f"WARNING: AI not configured — {unconfigured_reason}")
+
+        # Set only when the generic template is used because the AI was unavailable
+        # or failed — never for a design the AI produced but the critic scored low.
+        fallback_reason = None
+
         try:
             brief = await self._plan(llm, lead, style_traits)
 
@@ -146,7 +160,7 @@ class HTMLGenerator:
                 html_content = await self._revise(llm, lead, html_content, issues)
 
             if best_html is None:
-                logger.warning("LLM did not return valid HTML, using industry-specific fallback")
+                fallback_reason = unconfigured_reason or "LLM ran but did not return valid HTML"
                 html_content = self._generate_fallback_html(lead, style_traits)
                 quality_score = 50  # fallback is a known-decent static template, not critic-scored
             else:
@@ -156,8 +170,19 @@ class HTMLGenerator:
         except Exception as e:
             logger.error(f"HTML generation failed: {e}")
             lead.add_log(f"HTML generation failed: {str(e)}")
+            fallback_reason = unconfigured_reason or f"LLM call failed: {e}"
             html_content = self._generate_fallback_html(lead, style_traits)
             quality_score = 50
+
+        if fallback_reason:
+            logger.warning(
+                f"Generic fallback template used for {lead.company_name} — this is NOT an "
+                f"AI-generated design. Reason: {fallback_reason}"
+            )
+            lead.add_log(
+                f"WARNING: generic fallback template used (NOT an AI-generated design). "
+                f"Reason: {fallback_reason}"
+            )
 
         # Save HTML file
         settings = get_settings()
