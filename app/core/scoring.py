@@ -9,6 +9,7 @@ def compute_confidence(
     industry: str = "",
     html_generated: bool = False,
     email_drafted: bool = False,
+    html_quality_score: int | None = None,
 ) -> ConfidenceScore:
     """
     Compute transparent confidence score for a lead.
@@ -60,9 +61,9 @@ def compute_confidence(
     else:
         score.opportunity_clarity = 30
 
-    # HTML quality: only scored if generated
+    # HTML quality: use the critic's actual score if available, else a flat base score
     if html_generated:
-        score.html_quality = 70  # base score, can be refined
+        score.html_quality = html_quality_score if html_quality_score is not None else 70
     else:
         score.html_quality = 0
 

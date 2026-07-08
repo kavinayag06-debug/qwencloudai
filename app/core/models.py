@@ -110,6 +110,7 @@ class Lead(BaseModel):
     style_traits: Optional[StyleTraits] = None
     confidence: Optional[ConfidenceScore] = None
     html_path: Optional[str] = None
+    html_quality_score: int = Field(default=0, ge=0, le=100)
     screenshot_paths: list[str] = Field(default_factory=list)
     email_subject: str = ""
     email_body: str = ""

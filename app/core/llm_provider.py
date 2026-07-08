@@ -30,19 +30,20 @@ class LLMResponse:
         self.raw = raw or {}
 
     def as_json(self) -> dict:
-        """Try to parse content as JSON."""
+        """Parse content as JSON, tolerating code fences and leading/trailing prose."""
+        content = self.content.strip()
         try:
-            return json.loads(self.content)
-        except json.JSONDecodeError:
-            # Try to extract JSON from markdown code blocks
-            content = self.content.strip()
-            if content.startswith("```"):
-                lines = content.split("\n")
-                lines = lines[1:]  # remove opening ```
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                content = "\n".join(lines)
             return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+
+        # Find the first '{' or '[' and decode from there, ignoring anything
+        # before or after (models often wrap JSON in ```fences``` and commentary).
+        start = next((i for i, ch in enumerate(content) if ch in "{["), None)
+        if start is None:
+            raise json.JSONDecodeError("No JSON object found", content, 0)
+        obj, _ = json.JSONDecoder().raw_decode(content, start)
+        return obj
 
 
 class BaseLLMProvider(ABC):
