@@ -12,12 +12,7 @@ import logging
 from app.config import get_settings
 from app.core.llm_provider import get_llm_provider
 from app.core.models import Lead, LeadStatus, StyleTraits
-from app.core.prompts import (
-    HTML_GENERATION_PROMPT,
-    DESIGN_PLAN_PROMPT,
-    HTML_CRITIQUE_PROMPT,
-    HTML_REVISION_PROMPT,
-)
+from app.core.prompts import HTML_GENERATION_PROMPT
 from app.core.scoring import compute_confidence
 from app.storage.database import get_database
 
@@ -186,6 +181,16 @@ class HTMLGenerator:
                 html_generated=True,
                 email_drafted=bool(lead.email_body),
                 html_quality_score=quality_score,
+            )
+
+        # Recompute confidence now that html_quality can be scored
+        if lead.website_analysis:
+            lead.confidence = compute_confidence(
+                analysis=lead.website_analysis,
+                style_traits=lead.style_traits,
+                industry=lead.industry,
+                html_generated=True,
+                email_drafted=bool(lead.email_body),
             )
 
         # Save

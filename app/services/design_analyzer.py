@@ -6,7 +6,6 @@ and builds a style profile for HTML generation.
 """
 
 import logging
-from pathlib import Path
 from typing import Optional
 
 from app.config import get_settings
@@ -96,9 +95,15 @@ class DesignAnalyzer:
         normalized = []
         for t in traits_list:
             if isinstance(t, dict):
-                # If wrapped in a key like "style_traits", unwrap it
+                # If wrapped in a key like "style_traits", unwrap it, but keep
+                # sibling fields (e.g. design_patterns, quality_score) that live
+                # alongside "style_traits" in the same top-level object.
                 if "style_traits" in t and isinstance(t["style_traits"], dict):
-                    normalized.append(t["style_traits"])
+                    inner = dict(t["style_traits"])
+                    for sibling_key in ("design_patterns", "quality_score"):
+                        if sibling_key in t and sibling_key not in inner:
+                            inner[sibling_key] = t[sibling_key]
+                    normalized.append(inner)
                 elif "color_palette" in t:
                     normalized.append(t)
                 else:
