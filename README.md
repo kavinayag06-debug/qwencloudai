@@ -103,7 +103,10 @@ qwencloudai/
 │   ├── test_discovery.py
 │   ├── test_html_generation.py
 │   ├── test_approval.py
-│   └── test_file_handling.py
+│   ├── test_file_handling.py
+│   ├── test_confidence_recompute.py
+│   ├── test_design_analyzer.py
+│   └── test_email_service.py
 ├── data/
 │   ├── design_screenshots/   # Your past design references
 │   ├── output/               # Generated HTML/screenshots/zips
