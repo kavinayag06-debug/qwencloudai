@@ -45,6 +45,15 @@ boilerplate hero/cards/testimonial page for every lead, check the logs for
 "AI NOT CONFIGURED" / "NOT an AI-generated design" before debugging anything
 else, and fix `.env` (`LLM_PROVIDER` + `LLM_API_KEY`).
 
+Until this same change, `HTMLGenerator._plan` also referenced
+`DESIGN_PLAN_PROMPT`, `HTML_CRITIQUE_PROMPT`, and `HTML_REVISION_PROMPT`
+without importing them from `app.core.prompts`, so every call raised
+`NameError` and hit the `except Exception` fallback path — even a correctly
+configured, real LLM provider always silently produced the generic template.
+That import bug is now fixed, so the AI-ran-vs-fallback distinction above is
+meaningful; if it regresses, real AI output will disappear again without any
+config-looking symptom.
+
 ## `Database` ignores `DATABASE_URL`
 
 `Database.__init__` (`app/storage/database.py`) always opens
