@@ -28,6 +28,32 @@ and re-save `lead.confidence` at that stage too, or the new dimension will be
 permanently stuck at its zero-value default like `html_quality`/
 `outreach_confidence` used to be (see git history for the original bug).
 
+## Unconfigured AI falls back to a generic template — loudly
+
+With no `.env` (or `LLM_PROVIDER=mock`, or a blank/`your-api-key-here`
+`LLM_API_KEY`), `HTMLGenerator.generate` still succeeds: it writes the generic
+industry template from `_generate_fallback_html` with `quality_score=50` and
+the lead reaches `REDESIGN_GENERATED`. Historically this was silent and looked
+like a real AI result across machines. It is now loud:
+`llm_unconfigured_reason()` (`app/core/llm_provider.py`) detects mock mode and
+blank/placeholder keys, `app/main.py` logs a WARNING banner at startup, and
+`generate()` logs WARNINGs (module logger + `lead.add_log`) whenever the
+fallback is used because the AI was unavailable or the LLM call failed —
+distinct from the AI running and the critic scoring low, which keeps the AI's
+HTML and is never labeled a config failure. If output looks like the same
+boilerplate hero/cards/testimonial page for every lead, check the logs for
+"AI NOT CONFIGURED" / "NOT an AI-generated design" before debugging anything
+else, and fix `.env` (`LLM_PROVIDER` + `LLM_API_KEY`).
+
+Until this same change, `HTMLGenerator._plan` also referenced
+`DESIGN_PLAN_PROMPT`, `HTML_CRITIQUE_PROMPT`, and `HTML_REVISION_PROMPT`
+without importing them from `app.core.prompts`, so every call raised
+`NameError` and hit the `except Exception` fallback path — even a correctly
+configured, real LLM provider always silently produced the generic template.
+That import bug is now fixed, so the AI-ran-vs-fallback distinction above is
+meaningful; if it regresses, real AI output will disappear again without any
+config-looking symptom.
+
 ## `Database` ignores `DATABASE_URL`
 
 `Database.__init__` (`app/storage/database.py`) always opens

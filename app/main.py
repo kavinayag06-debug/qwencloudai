@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import router as api_router
 from app.ui.dashboard import router as ui_router
 from app.config import get_settings
+from app.core.llm_provider import llm_unconfigured_reason
 
 # Configure logging
 logging.basicConfig(
@@ -51,6 +52,16 @@ async def startup():
     logger.info(f"  Max Leads: {settings.max_leads}")
     logger.info(f"  Data Dir: {settings.data_dir}")
     logger.info("=" * 50)
+
+    unconfigured = llm_unconfigured_reason()
+    if unconfigured:
+        logger.warning("!" * 70)
+        logger.warning(f"AI NOT CONFIGURED: {unconfigured}")
+        logger.warning(
+            "Every generated redesign will be a generic non-AI fallback template "
+            "until this is fixed."
+        )
+        logger.warning("!" * 70)
 
 
 if __name__ == "__main__":

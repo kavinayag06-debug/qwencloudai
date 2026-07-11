@@ -1,5 +1,6 @@
 """Tests for HTML generation."""
 
+import logging
 import os
 import pytest
 import tempfile
@@ -78,6 +79,45 @@ async def test_html_generation_produces_file(sample_lead, sample_traits, tmp_pat
     # Cleanup
     config_module._settings = original_settings
     db_module._db = None
+
+
+@pytest.mark.asyncio
+async def test_mock_mode_fallback_is_loud(sample_lead, sample_traits, caplog):
+    """In mock mode the generic fallback still works, but is loudly labeled as non-AI."""
+    generator = HTMLGenerator()
+    with caplog.at_level(logging.WARNING, logger="app.services.html_generator"):
+        result = await generator.generate(sample_lead, sample_traits)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("AI NOT CONFIGURED" in msg for msg in warnings)
+    assert any("NOT an AI-generated design" in msg for msg in warnings)
+
+    # The lead's own log trail must record it too, not just the module logger
+    assert any("AI not configured" in log for log in result.logs)
+    assert any("NOT an AI-generated design" in log for log in result.logs)
+
+
+@pytest.mark.asyncio
+async def test_llm_failure_fallback_is_loud(sample_lead, sample_traits, caplog, monkeypatch):
+    """A configured provider whose LLM call fails produces a loud AI-failed warning."""
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_API_KEY", "sk-looks-real-but-invalid")
+
+    generator = HTMLGenerator()
+
+    async def failing_plan(*args, **kwargs):
+        raise RuntimeError("401 Unauthorized: invalid api key")
+
+    monkeypatch.setattr(generator, "_plan", failing_plan)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.html_generator"):
+        result = await generator.generate(sample_lead, sample_traits)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("NOT an AI-generated design" in msg and "LLM call failed" in msg for msg in warnings)
+    # Configured-but-failing is not mislabeled as "AI not configured"
+    assert not any("AI NOT CONFIGURED" in msg for msg in warnings)
+    assert any("NOT an AI-generated design" in log for log in result.logs)
 
 
 @pytest.mark.asyncio
