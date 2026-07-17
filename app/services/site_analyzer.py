@@ -14,6 +14,7 @@ Evaluates:
 
 import logging
 from typing import Optional
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -35,8 +36,13 @@ class SiteAnalyzer:
         logger.info(f"Analyzing website for {lead.company_name}: {lead.website_url}")
         lead.add_log(f"Starting website analysis: {lead.website_url}")
 
-        # Fetch page content
-        page_content = await self._fetch_page_content(lead.website_url)
+        # Fetch page content + real photos from the business's own site. These
+        # photos (not stock/placeholder images) are what the redesign will use,
+        # so the client's landing page always shows real, relevant imagery.
+        page_content, image_urls = await self._fetch_page(lead.website_url)
+        lead.source_image_urls = image_urls
+        if image_urls:
+            lead.add_log(f"Found {len(image_urls)} candidate photos on the original site")
 
         if not page_content:
             lead.add_log("Warning: Could not fetch website content, using description")
@@ -58,6 +64,11 @@ class SiteAnalyzer:
                 json_mode=True,
             )
             data = response.as_json()
+            # Handle case where model returns a list instead of dict
+            if isinstance(data, list) and len(data) > 0:
+                data = data[0] if isinstance(data[0], dict) else {}
+            if not isinstance(data, dict):
+                data = {}
 
             lead.website_analysis = WebsiteAnalysis(
                 visual_age=data.get("visual_age", ""),
@@ -105,10 +116,15 @@ class SiteAnalyzer:
         db.save_lead(lead)
         return lead
 
-    async def _fetch_page_content(self, url: str) -> Optional[str]:
-        """Fetch and extract text content from a URL."""
+    async def _fetch_page(self, url: str) -> tuple[Optional[str], list[str]]:
+        """Fetch a URL once and extract both text content and candidate photo URLs.
+
+        Returns (text_content, image_urls). image_urls is ordered by likely
+        relevance: og:image first, then <img> tags with real business photos
+        (icons, logos, and tracking pixels are filtered out heuristically).
+        """
         if not url or url.startswith("https://example.com"):
-            return None
+            return None, []
 
         try:
             async with httpx.AsyncClient(
@@ -118,16 +134,65 @@ class SiteAnalyzer:
             ) as client:
                 response = await client.get(url)
                 if response.status_code != 200:
-                    return None
+                    return None, []
 
                 soup = BeautifulSoup(response.text, "html.parser")
-                # Remove scripts and styles
+                image_urls = self._extract_image_urls(soup, str(response.url))
+
+                # Remove scripts and styles before extracting text
                 for tag in soup(["script", "style", "nav", "footer", "header"]):
                     tag.decompose()
 
                 text = soup.get_text(separator="\n", strip=True)
-                return text[:5000]
+                return text[:5000], image_urls
 
         except Exception as e:
             logger.error(f"Failed to fetch {url}: {e}")
-            return None
+            return None, []
+
+    @staticmethod
+    def _extract_image_urls(soup: BeautifulSoup, base_url: str, limit: int = 8) -> list[str]:
+        """Pull real, likely-relevant photo URLs from a parsed page.
+
+        Heuristics: prefer og:image / twitter:image (usually the site's best
+        hero photo), then large <img> tags, skipping obvious icons, logos,
+        tracking pixels, and data: URIs (which we can't safely re-host).
+        """
+        skip_hints = ("logo", "icon", "sprite", "pixel", "avatar", "badge", "spinner")
+        urls: list[str] = []
+        seen = set()
+
+        def add(candidate: Optional[str]):
+            if not candidate or candidate.startswith("data:"):
+                return
+            resolved = urljoin(base_url, candidate.strip())
+            parsed = urlparse(resolved)
+            if parsed.scheme not in ("http", "https"):
+                return
+            lowered = resolved.lower()
+            if any(hint in lowered for hint in skip_hints):
+                return
+            if resolved not in seen:
+                seen.add(resolved)
+                urls.append(resolved)
+
+        for meta_name in ("og:image", "og:image:secure_url", "twitter:image"):
+            tag = soup.find("meta", attrs={"property": meta_name}) or soup.find("meta", attrs={"name": meta_name})
+            if tag and tag.get("content"):
+                add(tag["content"])
+
+        for img in soup.find_all("img"):
+            src = img.get("src") or img.get("data-src") or img.get("data-lazy-src")
+            # Skip tiny images (width/height attrs are a weak but free signal)
+            try:
+                width = int(img.get("width", 0) or 0)
+                height = int(img.get("height", 0) or 0)
+                if 0 < width < 80 or 0 < height < 80:
+                    continue
+            except ValueError:
+                pass
+            add(src)
+            if len(urls) >= limit:
+                break
+
+        return urls[:limit]

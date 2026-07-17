@@ -1,6 +1,7 @@
-"""Tests for DesignAnalyzer._aggregate_traits (C-3)."""
+"""Tests for DesignAnalyzer industry-specific screenshot selection and trait parsing."""
 
 import os
+from pathlib import Path
 
 os.environ["LLM_PROVIDER"] = "mock"
 os.environ["VISION_PROVIDER"] = "mock"
@@ -8,61 +9,80 @@ os.environ["VISION_PROVIDER"] = "mock"
 from app.services.design_analyzer import DesignAnalyzer
 
 
-def test_aggregate_traits_preserves_siblings_of_style_traits_wrapper():
-    """design_patterns/quality_score living alongside a style_traits wrapper must survive."""
-    # Shape returned by MockProvider.vision() (app/core/llm_provider.py) and,
-    # per the audit, plausibly by real vision providers too.
-    raw_response = {
+def test_select_images_for_florist_industry(tmp_path):
+    """Florist industry selects florist-named screenshots."""
+    # Create fake screenshots
+    (tmp_path / "florist.jpg").write_bytes(b"fake")
+    (tmp_path / "bakery.jpg").write_bytes(b"fake")
+    (tmp_path / "fashion.jpg").write_bytes(b"fake")
+
+    analyzer = DesignAnalyzer()
+    selected = analyzer._select_images_for_industry(tmp_path, "florist")
+    names = [p.name for p in selected]
+    assert "florist.jpg" in names
+    assert "bakery.jpg" not in names
+
+
+def test_select_images_for_bakery_includes_dessert(tmp_path):
+    """Bakery industry selects bakery and dessert screenshots."""
+    (tmp_path / "bakery.jpg").write_bytes(b"fake")
+    (tmp_path / "dessert1.jpg").write_bytes(b"fake")
+    (tmp_path / "dessert2.jpg").write_bytes(b"fake")
+    (tmp_path / "fashion.jpg").write_bytes(b"fake")
+
+    analyzer = DesignAnalyzer()
+    selected = analyzer._select_images_for_industry(tmp_path, "bakery")
+    names = [p.name for p in selected]
+    assert "bakery.jpg" in names
+    assert "dessert1.jpg" in names
+    assert "dessert2.jpg" in names
+    assert "fashion.jpg" not in names
+
+
+def test_select_images_falls_back_to_all_when_no_match(tmp_path):
+    """Unknown industry falls back to all available screenshots."""
+    (tmp_path / "bakery.jpg").write_bytes(b"fake")
+    (tmp_path / "fashion.jpg").write_bytes(b"fake")
+
+    analyzer = DesignAnalyzer()
+    selected = analyzer._select_images_for_industry(tmp_path, "plumbing")
+    # Should return all since no pattern matches
+    assert len(selected) == 2
+
+
+def test_parse_traits_handles_wrapped_response():
+    """Vision model response wrapped in style_traits key is parsed correctly."""
+    raw = {
         "style_traits": {
-            "color_palette": ["#2C3E50", "#ECF0F1", "#3498DB", "#E74C3C"],
-            "typography": "modern sans-serif",
-            "layout_style": "clean minimalist",
-            "mood": "professional and approachable",
-            "industry_fit": ["retail", "services", "food"],
+            "color_palette": ["#2C3E50", "#ECF0F1"],
+            "typography": "serif",
+            "layout_style": "elegant",
+            "mood": "luxurious",
+            "industry_fit": ["florist"],
         },
-        "design_patterns": ["hero section", "grid cards", "sticky nav", "CTA buttons"],
-        "quality_score": 82,
+        "design_patterns": ["hero section", "gallery"],
+        "quality_score": 85,
     }
+    analyzer = DesignAnalyzer()
+    traits = analyzer._parse_traits(raw, "florist")
+    assert traits.color_palette == ["#2C3E50", "#ECF0F1"]
+    assert traits.design_patterns == ["hero section", "gallery"]
+    assert traits.quality_score == 85
+    assert traits.mood == "luxurious"
 
-    traits = DesignAnalyzer()._aggregate_traits([raw_response])
 
-    assert traits.design_patterns == ["hero section", "grid cards", "sticky nav", "CTA buttons"]
-    assert traits.quality_score == 82
-    assert traits.color_palette == ["#2C3E50", "#ECF0F1", "#3498DB", "#E74C3C"]
-
-
-def test_aggregate_traits_still_handles_flat_response():
-    """Responses without a style_traits wrapper (already flat) keep working."""
-    raw_response = {
-        "color_palette": ["#111111", "#222222"],
-        "typography": "serif",
+def test_parse_traits_handles_flat_response():
+    """Flat response without wrapper is parsed correctly."""
+    raw = {
+        "color_palette": ["#111", "#222"],
+        "typography": "sans-serif",
         "layout_style": "grid",
         "mood": "bold",
         "industry_fit": ["gym"],
         "design_patterns": ["hero section"],
         "quality_score": 60,
     }
-
-    traits = DesignAnalyzer()._aggregate_traits([raw_response])
-
+    analyzer = DesignAnalyzer()
+    traits = analyzer._parse_traits(raw, "gym")
     assert traits.design_patterns == ["hero section"]
     assert traits.quality_score == 60
-
-
-def test_aggregate_traits_averages_quality_score_across_batches():
-    """Multiple wrapped batches should merge design_patterns and average quality_score."""
-    batch_1 = {
-        "style_traits": {"color_palette": ["#111"], "mood": "calm"},
-        "design_patterns": ["hero section"],
-        "quality_score": 80,
-    }
-    batch_2 = {
-        "style_traits": {"color_palette": ["#222"], "mood": "bold"},
-        "design_patterns": ["card grid"],
-        "quality_score": 60,
-    }
-
-    traits = DesignAnalyzer()._aggregate_traits([batch_1, batch_2])
-
-    assert set(traits.design_patterns) == {"hero section", "card grid"}
-    assert traits.quality_score == 70

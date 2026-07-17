@@ -46,6 +46,27 @@ class LLMResponse:
         return obj
 
 
+def build_image_content_parts(image_paths: list[Path]) -> list[dict]:
+    """Build OpenAI-style image_url content parts from local file paths.
+
+    Shared by any call site that needs to attach real reference images to a
+    chat completion (not just the vision() path) — e.g. HTML generation and
+    critique steps that need to see the actual design references, not a text
+    paraphrase of them.
+    """
+    parts = []
+    for img_path in image_paths:
+        img_data = img_path.read_bytes()
+        b64 = base64.b64encode(img_data).decode("utf-8")
+        suffix = img_path.suffix.lower().lstrip(".")
+        mime = "image/jpeg" if suffix in ("jpg", "jpeg") else (f"image/{suffix}" if suffix in ("png", "gif", "webp") else "image/png")
+        parts.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{b64}"}
+        })
+    return parts
+
+
 class BaseLLMProvider(ABC):
     """Abstract base for all LLM providers."""
 
@@ -69,7 +90,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self.client = httpx.AsyncClient(timeout=120.0)
+        self.client = httpx.AsyncClient(timeout=300.0)
 
     async def complete(self, messages: list[dict], temperature: float = 0.7,
                        max_tokens: int = 4096, json_mode: bool = False) -> LLMResponse:
@@ -85,6 +106,14 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+
+        # Qwen's hybrid-thinking models (qwen3.6-*, qwen3.7-*, etc.) generate a
+        # hidden chain-of-thought before every visible answer unless told not to.
+        # This is the single biggest source of extra latency on DashScope.
+        # We don't need reasoning traces for HTML generation/scoring, so turn it
+        # off. Harmless no-op on OpenAI/OpenRouter, which ignore unknown fields.
+        if "qwen" in self.model.lower():
+            payload["enable_thinking"] = False
 
         url = f"{self.base_url}/chat/completions"
         logger.info(f"LLM request to {url} model={self.model}")
@@ -105,7 +134,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             img_data = img_path.read_bytes()
             b64 = base64.b64encode(img_data).decode("utf-8")
             suffix = img_path.suffix.lower().lstrip(".")
-            mime = f"image/{suffix}" if suffix in ("png", "jpeg", "jpg", "gif", "webp") else "image/png"
+            mime = "image/jpeg" if suffix in ("jpg", "jpeg") else (f"image/{suffix}" if suffix in ("png", "gif", "webp") else "image/png")
             content_parts.append({
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime};base64,{b64}"}

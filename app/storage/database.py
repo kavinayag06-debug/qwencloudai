@@ -34,7 +34,10 @@ class LeadRecord(Base):
     style_traits_json = Column(Text, default=None)
     confidence_json = Column(Text, default=None)
     html_path = Column(String, default=None)
+    html_quality_score = Column(Integer, default=0)
     screenshot_paths_json = Column(Text, default="[]")
+    source_image_urls_json = Column(Text, default="[]")
+    local_image_paths_json = Column(Text, default="[]")
     email_subject = Column(String, default="")
     email_body = Column(Text, default="")
     zip_path = Column(String, default=None)
@@ -52,7 +55,31 @@ class Database:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
         Base.metadata.create_all(self.engine)
+        self._migrate_missing_columns()
         self.SessionLocal = sessionmaker(bind=self.engine)
+
+    def _migrate_missing_columns(self) -> None:
+        """Add any columns that exist on LeadRecord but not yet in the sqlite
+        file on disk. SQLAlchemy's create_all() only creates missing *tables*,
+        never alters existing ones, so a schema change (like adding a new
+        field to Lead) would otherwise raise 'no such column' against any
+        database file created before this change. Simple additive columns are
+        safe to add this way in SQLite."""
+        with self.engine.connect() as conn:
+            existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(leads)").fetchall()}
+            for column in LeadRecord.__table__.columns:
+                if column.name not in existing:
+                    col_type = "TEXT"
+                    default = "NULL"
+                    if isinstance(column.type, Integer):
+                        col_type = "INTEGER"
+                        default = "0"
+                    elif column.name.endswith("_json"):
+                        default = "'[]'" if column.default is not None and column.default.arg not in (None,) else "NULL"
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE leads ADD COLUMN {column.name} {col_type} DEFAULT {default}"
+                    )
+                    conn.commit()
 
     def get_session(self) -> Session:
         return self.SessionLocal()
@@ -80,10 +107,13 @@ class Database:
             record.discovery_source = lead.discovery_source
             record.status = lead.status.value
             record.html_path = lead.html_path
+            record.html_quality_score = lead.html_quality_score
             record.email_subject = lead.email_subject
             record.email_body = lead.email_body
             record.zip_path = lead.zip_path
             record.screenshot_paths_json = json.dumps(lead.screenshot_paths)
+            record.source_image_urls_json = json.dumps(lead.source_image_urls)
+            record.local_image_paths_json = json.dumps(lead.local_image_paths)
             record.logs_json = json.dumps(lead.logs)
             record.updated_at = datetime.utcnow()
 
@@ -156,10 +186,13 @@ class Database:
             discovery_source=record.discovery_source,
             status=LeadStatus(record.status),
             html_path=record.html_path,
+            html_quality_score=record.html_quality_score or 0,
             email_subject=record.email_subject,
             email_body=record.email_body,
             zip_path=record.zip_path,
             screenshot_paths=json.loads(record.screenshot_paths_json or "[]"),
+            source_image_urls=json.loads(record.source_image_urls_json or "[]"),
+            local_image_paths=json.loads(record.local_image_paths_json or "[]"),
             logs=json.loads(record.logs_json or "[]"),
             created_at=record.created_at,
             updated_at=record.updated_at,

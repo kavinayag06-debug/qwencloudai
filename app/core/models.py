@@ -54,6 +54,10 @@ class StyleTraits(BaseModel):
     industry_fit: list[str] = Field(default_factory=list)
     design_patterns: list[str] = Field(default_factory=list)
     quality_score: int = Field(default=70, ge=0, le=100)
+    # Paths to the actual reference screenshots these traits were derived from.
+    # Kept alongside the text summary so downstream steps (HTML build + critique)
+    # can attach the real images to the model call instead of only a paraphrase.
+    reference_image_paths: list[str] = Field(default_factory=list)
 
 
 class ConfidenceScore(BaseModel):
@@ -112,6 +116,13 @@ class Lead(BaseModel):
     html_path: Optional[str] = None
     html_quality_score: int = Field(default=0, ge=0, le=100)
     screenshot_paths: list[str] = Field(default_factory=list)
+    # Real photo URLs scraped from the business's own current website (og:image,
+    # largest content <img> tags). These are the only images the redesign should
+    # ever use — they're actually of the business, unlike stock photography.
+    source_image_urls: list[str] = Field(default_factory=list)
+    # Filenames (relative to the lead's output "images/" folder) that were
+    # successfully downloaded and are safe to reference in the generated HTML.
+    local_image_paths: list[str] = Field(default_factory=list)
     email_subject: str = ""
     email_body: str = ""
     zip_path: Optional[str] = None

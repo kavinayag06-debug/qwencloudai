@@ -7,22 +7,32 @@ For each shortlisted client:
 - Saves HTML into the output folder
 """
 
+import hashlib
 import logging
+from pathlib import Path
+
+import httpx
 
 from app.config import get_settings
-from app.core.llm_provider import get_llm_provider
+from app.core.llm_provider import get_llm_provider, get_vision_provider, build_image_content_parts
 from app.core.models import Lead, LeadStatus, StyleTraits
-from app.core.prompts import HTML_GENERATION_PROMPT
+from app.core.prompts import HTML_GENERATION_PROMPT, DESIGN_PLAN_PROMPT, HTML_CRITIQUE_PROMPT, HTML_REVISION_PROMPT
 from app.core.scoring import compute_confidence
 from app.storage.database import get_database
 
 logger = logging.getLogger(__name__)
 
+# How many actual reference screenshots to attach to the build/critique calls.
+# Keep small: enough for the model to genuinely study composition/spacing/type
+# without blowing the context window or cost per lead.
+MAX_REFERENCE_IMAGES = 3
+# How many real photos to try to pull from the client's own site.
+MAX_SOURCE_IMAGES = 4
+
 # Quality bar a generated design must clear to skip further revision rounds.
 QUALITY_THRESHOLD = 75
-# Build once, revise at most this many times. ponytail: bounded loop keeps LLM cost
-# predictable; raise if the critic keeps failing designs that a human would pass.
-MAX_REVISIONS = 1
+# Build once, revise at most this many times.
+MAX_REVISIONS = 2
 
 # Industry-specific design presets
 INDUSTRY_PRESETS = {
@@ -33,6 +43,7 @@ INDUSTRY_PRESETS = {
         "hero_text": "Beautiful Blooms for Every Occasion",
         "services": ["Wedding Arrangements", "Daily Fresh Bouquets", "Event Floristry"],
         "testimonial": "The most beautiful arrangement I've ever received. Absolutely stunning craftsmanship!",
+        "layout": "split",  # side-by-side hero
     },
     "restaurant": {
         "colors": ["#8B1A1A", "#FFF8E7", "#D4A017", "#1A1A1A"],
@@ -41,6 +52,7 @@ INDUSTRY_PRESETS = {
         "hero_text": "Authentic Flavours, Unforgettable Moments",
         "services": ["Dine-In Experience", "Catering Services", "Private Events"],
         "testimonial": "Best food in the neighbourhood! We come back every week. The flavours are incredible.",
+        "layout": "fullwidth",  # large full-width hero
     },
     "cafe": {
         "colors": ["#6B4423", "#FDF6EC", "#C9956B", "#2C1810"],
@@ -49,6 +61,7 @@ INDUSTRY_PRESETS = {
         "hero_text": "Your Neighbourhood Coffee Spot",
         "services": ["Specialty Coffee", "Fresh Pastries", "Cozy Workspace"],
         "testimonial": "The perfect place to grab a coffee and get some work done. Love the atmosphere!",
+        "layout": "minimal",  # minimal white-space heavy
     },
     "spa": {
         "colors": ["#5B7B7A", "#F7F3EF", "#C9B99A", "#2C3E3D"],
@@ -57,6 +70,7 @@ INDUSTRY_PRESETS = {
         "hero_text": "Relax. Rejuvenate. Restore.",
         "services": ["Massage Therapy", "Facial Treatments", "Body Wellness"],
         "testimonial": "An oasis of calm. I left feeling completely renewed. Can't recommend enough!",
+        "layout": "centered",  # centered with lots of breathing room
     },
     "salon": {
         "colors": ["#C4547A", "#FFF5F7", "#2C2C2C", "#E8B4B8"],
@@ -65,6 +79,7 @@ INDUSTRY_PRESETS = {
         "hero_text": "Your Best Look Starts Here",
         "services": ["Haircuts & Styling", "Colour Treatments", "Bridal Packages"],
         "testimonial": "Finally found a salon that really listens. My hair has never looked this good!",
+        "layout": "bold",  # bold typography, dark theme option
     },
     "gym": {
         "colors": ["#E63946", "#1D3557", "#F1FAEE", "#457B9D"],
@@ -73,6 +88,16 @@ INDUSTRY_PRESETS = {
         "hero_text": "Push Your Limits. Transform Your Life.",
         "services": ["Personal Training", "Group Classes", "24/7 Access"],
         "testimonial": "This gym changed my life. The trainers are incredible and the community is so supportive.",
+        "layout": "angular",  # diagonal cuts, bold angles
+    },
+    "sports": {
+        "colors": ["#E63946", "#1D3557", "#F1FAEE", "#457B9D"],
+        "font": "Oswald",
+        "mood": "energetic, powerful, motivating",
+        "hero_text": "Achieve More. Play Harder.",
+        "services": ["Sports Facilities", "Group Activities", "Membership Plans"],
+        "testimonial": "Amazing facilities and a great community vibe. Something for everyone.",
+        "layout": "angular",
     },
     "clinic": {
         "colors": ["#1B6CA8", "#F0F8FF", "#4CAF50", "#2C3E50"],
@@ -81,6 +106,7 @@ INDUSTRY_PRESETS = {
         "hero_text": "Compassionate Care for Your Family",
         "services": ["General Consultation", "Health Screening", "Vaccination"],
         "testimonial": "Dr. and the team are always so thorough and kind. We trust them with our whole family's health.",
+        "layout": "clean",  # very clean, medical-style
     },
     "bakery": {
         "colors": ["#D4763B", "#FFF9F0", "#8B4513", "#F5DEB3"],
@@ -89,6 +115,7 @@ INDUSTRY_PRESETS = {
         "hero_text": "Freshly Baked with Love, Daily",
         "services": ["Artisan Breads", "Custom Cakes", "Pastries & Treats"],
         "testimonial": "The croissants here are better than what I had in Paris. Not exaggerating!",
+        "layout": "warm",  # warm tones, rounded elements
     },
     "retail": {
         "colors": ["#2C3E50", "#ECF0F1", "#E74C3C", "#3498DB"],
@@ -97,6 +124,16 @@ INDUSTRY_PRESETS = {
         "hero_text": "Quality Products, Personal Service",
         "services": ["Curated Selection", "Expert Advice", "Local Delivery"],
         "testimonial": "My go-to shop for quality items. The staff really know their products.",
+        "layout": "grid",  # product-grid focused
+    },
+    "fashion": {
+        "colors": ["#1A1A1A", "#FAFAFA", "#C9A96E", "#333333"],
+        "font": "Playfair Display",
+        "mood": "elegant, luxurious, editorial",
+        "hero_text": "Define Your Style",
+        "services": ["New Arrivals", "Personal Styling", "Exclusive Collections"],
+        "testimonial": "Such a curated selection. I always find something unique here.",
+        "layout": "editorial",  # magazine-style
     },
 }
 
@@ -107,6 +144,7 @@ DEFAULT_PRESET = {
     "hero_text": "Quality Service You Can Trust",
     "services": ["Expert Service", "Local Presence", "Customer First"],
     "testimonial": "Wonderful experience from start to finish. Highly recommended!",
+    "layout": "fullwidth",
 }
 
 
@@ -119,12 +157,27 @@ class HTMLGenerator:
         lead.add_log("Starting HTML generation")
 
         llm = get_llm_provider()
+        vision = get_vision_provider()
         quality_score = 0
+
+        # Reference screenshots: attach the *actual* images to the model call,
+        # not just the text paraphrase in style_traits. Without this the model
+        # never sees what "good" looks like, which is the main reason past
+        # output didn't resemble the samples at all.
+        reference_images = self._select_reference_images(style_traits, lead)
+
+        # Real photos of this specific business, downloaded from their current
+        # site. Every generated <img> must point at one of these local files
+        # (or none at all) — never a hotlinked stock photo or a path that was
+        # never created.
+        settings = get_settings()
+        lead_dir = settings.output_dir / lead.id
+        local_images = await self._prepare_images(lead, lead_dir)
 
         try:
             brief = await self._plan(llm, lead, style_traits)
 
-            html_content = await self._build(llm, lead, style_traits, brief)
+            html_content = await self._build(vision, lead, style_traits, brief, reference_images, local_images)
             best_html = html_content if self._looks_like_html(html_content) else None
             best_score = -1
 
@@ -132,7 +185,7 @@ class HTMLGenerator:
                 if not self._looks_like_html(html_content):
                     break
 
-                critique = await self._critique(llm, lead, html_content)
+                critique = await self._critique(vision, lead, html_content, reference_images)
                 score = int(critique.get("score", 0))
                 issues = critique.get("issues", [])
                 lead.add_log(f"Design critique round {round_num + 1}: score={score}, issues={len(issues)}")
@@ -160,8 +213,6 @@ class HTMLGenerator:
             quality_score = 50
 
         # Save HTML file
-        settings = get_settings()
-        lead_dir = settings.output_dir / lead.id
         lead_dir.mkdir(parents=True, exist_ok=True)
 
         html_path = lead_dir / "index.html"
@@ -183,20 +234,72 @@ class HTMLGenerator:
                 html_quality_score=quality_score,
             )
 
-        # Recompute confidence now that html_quality can be scored
-        if lead.website_analysis:
-            lead.confidence = compute_confidence(
-                analysis=lead.website_analysis,
-                style_traits=lead.style_traits,
-                industry=lead.industry,
-                html_generated=True,
-                email_drafted=bool(lead.email_body),
-            )
-
         # Save
         db = get_database()
         db.save_lead(lead)
         return lead
+
+    @staticmethod
+    def _select_reference_images(style_traits: StyleTraits, lead: Lead) -> list[Path]:
+        """Pick a small, varied subset of the actual reference screenshots.
+
+        Uses a stable hash of the lead so different leads see different
+        reference images across runs, instead of always the same first N.
+        """
+        paths = [Path(p) for p in (style_traits.reference_image_paths or []) if Path(p).exists()]
+        if len(paths) <= MAX_REFERENCE_IMAGES:
+            return paths
+        seed = int(hashlib.sha256((lead.id or lead.company_name).encode()).hexdigest(), 16)
+        offset = seed % len(paths)
+        return [paths[(offset + i) % len(paths)] for i in range(MAX_REFERENCE_IMAGES)]
+
+    async def _prepare_images(self, lead: Lead, lead_dir: Path) -> list[str]:
+        """Download real photos from the client's current site into images/.
+
+        Returns the filenames (relative to lead_dir) that were actually saved
+        successfully. Only these filenames are ever handed to the model — if
+        the list is empty, the prompt instructs a photo-free, CSS-only design
+        instead of a broken <img> or an unrelated stock photo.
+        """
+        if not lead.source_image_urls:
+            return []
+
+        images_dir = lead_dir / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        saved: list[str] = []
+
+        async with httpx.AsyncClient(
+            timeout=15.0, follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+        ) as client:
+            for i, url in enumerate(lead.source_image_urls[:MAX_SOURCE_IMAGES]):
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code != 200:
+                        continue
+                    content_type = resp.headers.get("content-type", "")
+                    if not content_type.startswith("image/"):
+                        continue
+                    if len(resp.content) < 2048:  # almost certainly an icon/pixel, not a photo
+                        continue
+                    ext = content_type.split("/")[-1].split(";")[0].strip() or "jpg"
+                    if ext == "jpeg":
+                        ext = "jpg"
+                    if ext not in ("jpg", "png", "webp", "gif"):
+                        ext = "jpg"
+                    filename = f"photo_{i + 1}.{ext}"
+                    (images_dir / filename).write_bytes(resp.content)
+                    saved.append(filename)
+                except Exception as e:
+                    logger.warning(f"Could not download image {url}: {e}")
+                    continue
+
+        lead.local_image_paths = saved
+        if saved:
+            lead.add_log(f"Downloaded {len(saved)} real photos from the client's site")
+        else:
+            lead.add_log("No usable photos found on the client's site; using a photo-free design")
+        return saved
 
     async def _plan(self, llm, lead: Lead, style_traits: StyleTraits) -> dict:
         """Planner step: produce a business-specific content brief before any HTML is written."""
@@ -225,14 +328,32 @@ class HTMLGenerator:
         except Exception:
             return {}
 
-    async def _build(self, llm, lead: Lead, style_traits: StyleTraits, brief: dict) -> str:
-        """Builder step: generate the HTML, informed by the planner's brief."""
+    async def _build(self, vision, lead: Lead, style_traits: StyleTraits, brief: dict,
+                      reference_images: list[Path], local_images: list[str]) -> str:
+        """Builder step: generate the HTML, informed by the planner's brief and
+        grounded in the actual reference screenshots (attached as images, not
+        just described in text)."""
         design_problems = ", ".join(
             lead.website_analysis.design_problems if lead.website_analysis else ["outdated design"]
         )
         design_patterns = list(style_traits.design_patterns or [])
         if brief.get("sections"):
             design_patterns = brief["sections"]
+
+        if local_images:
+            image_instructions = (
+                f"Real photos of this business are available at these EXACT local paths — "
+                f"use only these, each at most once, and no others: "
+                + ", ".join(f'"images/{name}"' for name in local_images)
+            )
+        else:
+            image_instructions = (
+                "No real photos of this business are available. Do NOT use <img> tags, "
+                "picsum.photos, unsplash, or any other placeholder/stock image service. "
+                "Build the visual interest entirely from CSS: gradients, color blocks, "
+                "geometric shapes, subtle patterns, and typography, the way the attached "
+                "reference designs do in their non-photo sections."
+            )
 
         prompt = HTML_GENERATION_PROMPT.format(
             company_name=lead.company_name,
@@ -244,26 +365,67 @@ class HTMLGenerator:
             layout_style=style_traits.layout_style or "clean minimalist",
             mood=style_traits.mood or "professional",
             design_patterns=", ".join(design_patterns) if design_patterns else "hero section, card grid, testimonials, CTA",
+            image_instructions=image_instructions,
         )
         if brief:
-            prompt += f"\n\nContent brief to follow (use this specific content, not generic filler):\n{brief}"
+            brief_text = []
+            if brief.get("headline"):
+                brief_text.append(f"Headline: {brief['headline']}")
+            if brief.get("subheadline"):
+                brief_text.append(f"Subheadline: {brief['subheadline']}")
+            if brief.get("highlights"):
+                brief_text.append("Service highlights:")
+                for h in brief["highlights"]:
+                    title = h.get("title", "") if isinstance(h, dict) else str(h)
+                    desc = h.get("description", "") if isinstance(h, dict) else ""
+                    brief_text.append(f"  - {title}: {desc}")
+            if brief.get("cta_text"):
+                brief_text.append(f"CTA button text: {brief['cta_text']}")
+            if brief.get("testimonial_placeholder"):
+                brief_text.append(f"Sample testimonial (mark as placeholder): {brief['testimonial_placeholder']}")
+            if brief.get("meta_description"):
+                brief_text.append(f"Meta description: {brief['meta_description']}")
+            prompt += "\n\nContent brief (use this specific content, not generic filler):\n" + "\n".join(brief_text)
 
-        response = await llm.complete(
-            messages=[{"role": "user", "content": prompt}],
+        content_parts = [{"type": "text", "text": prompt}]
+        if reference_images:
+            content_parts.append({
+                "type": "text",
+                "text": (
+                    f"\nThe {len(reference_images)} image(s) below are real past designs from our "
+                    "studio. Study their composition, spacing, type scale, hero layout, and use of "
+                    "whitespace closely and reproduce that *level of design quality and structure* "
+                    "for this business — do not copy their specific content or colors verbatim, "
+                    "adapt the palette above onto the same caliber of layout."
+                ),
+            })
+            content_parts.extend(build_image_content_parts(reference_images))
+
+        response = await vision.complete(
+            messages=[{"role": "user", "content": content_parts}],
             temperature=0.7,
             max_tokens=8192,
         )
         return self._strip_code_fence(response.content)
 
-    async def _critique(self, llm, lead: Lead, html_content: str) -> dict:
-        """Critic step: score the generated HTML against commercial-quality standards."""
+    async def _critique(self, vision, lead: Lead, html_content: str, reference_images: list[Path]) -> dict:
+        """Critic step: score the generated HTML against commercial-quality
+        standards AND fidelity to the attached reference designs."""
         prompt = HTML_CRITIQUE_PROMPT.format(
             company_name=lead.company_name,
             industry=lead.industry,
             html_content=html_content,
         )
-        response = await llm.complete(
-            messages=[{"role": "user", "content": prompt}],
+        content_parts = [{"type": "text", "text": prompt}]
+        if reference_images:
+            content_parts.append({
+                "type": "text",
+                "text": "\nThe image(s) below are the reference designs this page is supposed to match in quality and composition. Judge criterion 11 against them directly.",
+            })
+            content_parts.extend(build_image_content_parts(reference_images))
+
+        response = await vision.complete(
+            messages=[{"role": "user", "content": content_parts}],
             temperature=0.2,
             json_mode=True,
         )
@@ -302,188 +464,6 @@ class HTMLGenerator:
         return lowered.startswith("<!doctype") or lowered.startswith("<html")
 
     def _generate_fallback_html(self, lead: Lead, style_traits: StyleTraits) -> str:
-        """Generate industry-specific fallback HTML."""
-        # Get industry preset or default
-        industry_key = lead.industry.lower().strip()
-        preset = INDUSTRY_PRESETS.get(industry_key, DEFAULT_PRESET)
-
-        # Use style traits colors if available, otherwise use industry preset
-        if style_traits.color_palette and len(style_traits.color_palette) >= 3:
-            colors = style_traits.color_palette
-        else:
-            colors = preset["colors"]
-
-        primary = colors[0]
-        secondary = colors[1] if len(colors) > 1 else "#F5F5F5"
-        accent = colors[2] if len(colors) > 2 else "#3498DB"
-        dark = colors[3] if len(colors) > 3 else "#1A1A1A"
-
-        font = preset["font"]
-        hero_text = preset["hero_text"]
-        services = preset["services"]
-        testimonial = preset["testimonial"]
-
-        return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{lead.company_name} - Redesign Concept</title>
-    <link href="https://fonts.googleapis.com/css2?family={font.replace(' ', '+')}:wght@300;400;600;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ font-family: 'Inter', sans-serif; color: {dark}; line-height: 1.6; background: #fff; }}
-        h1, h2, h3 {{ font-family: '{font}', serif; }}
-
-        .hero {{
-            background: linear-gradient(135deg, {primary} 0%, {accent} 100%);
-            color: white;
-            padding: 100px 20px;
-            text-align: center;
-            min-height: 70vh;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-        }}
-        .hero h1 {{ font-size: 3.2rem; margin-bottom: 1rem; font-weight: 700; letter-spacing: -0.02em; }}
-        .hero p {{ font-size: 1.25rem; opacity: 0.9; max-width: 600px; margin: 0 auto 2.5rem; }}
-        .hero .cta {{
-            display: inline-block;
-            background: white;
-            color: {primary};
-            padding: 16px 40px;
-            border-radius: 50px;
-            text-decoration: none;
-            font-weight: 600;
-            font-size: 1.05rem;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
-        }}
-        .hero .cta:hover {{ transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.2); }}
-
-        .section {{ padding: 80px 20px; max-width: 1100px; margin: 0 auto; }}
-        .section h2 {{ font-size: 2.2rem; margin-bottom: 0.75rem; color: {primary}; }}
-        .section .subtitle {{ font-size: 1.1rem; color: #666; margin-bottom: 2.5rem; }}
-
-        .cards {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 28px;
-            margin-top: 2rem;
-        }}
-        .card {{
-            background: {secondary};
-            border-radius: 16px;
-            padding: 36px 28px;
-            text-align: center;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-            border: 1px solid rgba(0,0,0,0.04);
-        }}
-        .card:hover {{ transform: translateY(-4px); box-shadow: 0 12px 40px rgba(0,0,0,0.08); }}
-        .card h3 {{ margin-bottom: 0.75rem; color: {primary}; font-size: 1.3rem; }}
-        .card p {{ font-size: 0.95rem; color: #555; line-height: 1.7; }}
-        .card .icon {{ font-size: 2.5rem; margin-bottom: 1rem; }}
-
-        .testimonials {{
-            background: {secondary};
-            padding: 80px 20px;
-        }}
-        .testimonials .inner {{ max-width: 800px; margin: 0 auto; text-align: center; }}
-        .testimonials h2 {{ color: {primary}; margin-bottom: 2rem; font-size: 2rem; }}
-        .quote {{
-            font-size: 1.2rem;
-            font-style: italic;
-            color: #444;
-            line-height: 1.8;
-            margin-bottom: 1.5rem;
-        }}
-        .quote-author {{ font-weight: 600; color: {primary}; }}
-
-        .contact {{
-            background: {primary};
-            color: white;
-            padding: 80px 20px;
-            text-align: center;
-        }}
-        .contact h2 {{ color: white; margin-bottom: 1.5rem; font-size: 2.2rem; }}
-        .contact p {{ color: rgba(255,255,255,0.9); font-size: 1.1rem; margin-bottom: 0.5rem; }}
-        .contact .cta {{
-            display: inline-block;
-            margin-top: 2rem;
-            background: white;
-            color: {primary};
-            padding: 14px 36px;
-            border-radius: 50px;
-            text-decoration: none;
-            font-weight: 600;
-            transition: all 0.3s ease;
-        }}
-        .contact .cta:hover {{ transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.2); }}
-
-        footer {{
-            background: {dark};
-            color: #999;
-            padding: 30px 20px;
-            text-align: center;
-            font-size: 0.85rem;
-        }}
-        footer a {{ color: {accent}; text-decoration: none; }}
-
-        @media (max-width: 768px) {{
-            .hero h1 {{ font-size: 2.2rem; }}
-            .hero {{ padding: 60px 16px; min-height: 50vh; }}
-            .section {{ padding: 50px 16px; }}
-            .cards {{ grid-template-columns: 1fr; }}
-        }}
-    </style>
-</head>
-<body>
-    <section class="hero">
-        <h1>{lead.company_name}</h1>
-        <p>{hero_text}</p>
-        <a href="#contact" class="cta">Get in Touch</a>
-    </section>
-
-    <section class="section">
-        <h2>What We Offer</h2>
-        <p class="subtitle">Discover why {lead.location} locals choose us.</p>
-        <div class="cards">
-            <div class="card">
-                <div class="icon">✦</div>
-                <h3>{services[0]}</h3>
-                <p>Crafted with care and attention to detail, delivering excellence every time.</p>
-            </div>
-            <div class="card">
-                <div class="icon">✦</div>
-                <h3>{services[1]}</h3>
-                <p>Tailored to your needs with a personal touch that makes all the difference.</p>
-            </div>
-            <div class="card">
-                <div class="icon">✦</div>
-                <h3>{services[2]}</h3>
-                <p>Going above and beyond to ensure your complete satisfaction.</p>
-            </div>
-        </div>
-    </section>
-
-    <section class="testimonials">
-        <div class="inner">
-            <h2>What People Say</h2>
-            <p class="quote">"{testimonial}"</p>
-            <p class="quote-author">— Satisfied Customer</p>
-        </div>
-    </section>
-
-    <section class="contact" id="contact">
-        <h2>Visit Us Today</h2>
-        <p>{lead.address or lead.location}</p>
-        <p>{lead.phone}</p>
-        <a href="mailto:hello@{lead.company_name.lower().replace(' ', '')}.com" class="cta">Contact Us</a>
-    </section>
-
-    <footer>
-        <p>&copy; 2025 {lead.company_name} &middot; {lead.location} &middot; Redesign concept by <a href="#">QwenCloud AI</a></p>
-    </footer>
-</body>
-</html>"""
+        """Generate industry-specific fallback HTML with varied layouts."""
+        from app.services.fallback_layouts import generate_fallback
+        return generate_fallback(lead, style_traits, INDUSTRY_PRESETS, DEFAULT_PRESET)

@@ -5,11 +5,13 @@ Pipeline:
 1. Determine location scope
 2. Query all available connectors
 3. Filter for brick-and-mortar with weak websites
-4. Rank by redesign opportunity and proximity
-5. Return top N candidates
+4. EXCLUDE previously discovered businesses (always find new ones)
+5. Rank by redesign opportunity and proximity
+6. Return top N NEW candidates
 """
 
 import logging
+import random
 from typing import Optional
 
 from app.config import get_settings
@@ -37,10 +39,8 @@ class DiscoveryService:
 
         # Add connectors in priority order
         if settings.llm_provider == "mock":
-            # In mock mode, use mock connector
             connectors.append(MockConnector())
         else:
-            # Real connectors
             google = GoogleMapsConnector()
             if google.is_available():
                 connectors.append(google)
@@ -53,7 +53,6 @@ class DiscoveryService:
             if web.is_available():
                 connectors.append(web)
 
-            # Always keep mock as ultimate fallback
             if not connectors:
                 connectors.append(MockConnector())
 
@@ -63,9 +62,21 @@ class DiscoveryService:
         """
         Run the full discovery pipeline.
 
-        Returns top N leads ranked by opportunity.
+        ALWAYS returns NEW businesses that haven't been discovered before.
+        Excludes any company already in the database.
         """
         logger.info(f"Starting discovery for {request.location}, max={request.max_results}")
+
+        # Get names of all previously discovered leads to exclude them
+        db = get_database()
+        existing_leads = db.get_all_leads()
+        existing_names = {el.company_name.lower().strip() for el in existing_leads}
+        existing_urls = {el.website_url.lower().strip() for el in existing_leads if el.website_url}
+        logger.info(f"Excluding {len(existing_names)} previously discovered businesses")
+
+        # Randomize category order each run to get different results
+        categories = list(request.categories)
+        random.shuffle(categories)
 
         all_results: list[DiscoveryResult] = []
 
@@ -75,8 +86,8 @@ class DiscoveryService:
                 logger.info(f"Querying connector: {connector.name}")
                 results = await connector.discover(
                     location=request.location,
-                    categories=request.categories,
-                    max_results=request.max_results * 2,
+                    categories=categories,
+                    max_results=request.max_results * 4,  # Fetch more to have room after filtering
                     latitude=request.latitude,
                     longitude=request.longitude,
                 )
@@ -90,7 +101,7 @@ class DiscoveryService:
             logger.warning("No results from any connector")
             return []
 
-        # Deduplicate by company name
+        # Deduplicate by company name within this batch
         seen_names = set()
         unique_results = []
         for r in all_results:
@@ -99,18 +110,31 @@ class DiscoveryService:
                 seen_names.add(name_key)
                 unique_results.append(r)
 
-        # Filter: must have a website URL (otherwise can't analyze)
-        with_website = [r for r in unique_results if r.website_url]
+        # EXCLUDE previously discovered businesses
+        new_results = []
+        for r in unique_results:
+            name_key = r.company_name.lower().strip()
+            url_key = r.website_url.lower().strip() if r.website_url else ""
+            if name_key in existing_names:
+                continue
+            if url_key and url_key in existing_urls:
+                continue
+            new_results.append(r)
 
-        # If not enough results, expand scope message
-        if len(with_website) < request.max_results:
-            logger.info(
-                f"Only {len(with_website)} results with websites. "
-                f"Including all {len(unique_results)} results."
-            )
-            candidates = unique_results
+        logger.info(f"After excluding existing: {len(new_results)} new businesses (from {len(unique_results)} unique)")
+
+        # Filter: must have a website URL
+        with_website = [r for r in new_results if r.website_url]
+
+        if not with_website:
+            logger.warning("No new businesses with websites found. Try different categories.")
+            # Fall back to all new results even without websites
+            candidates = new_results
         else:
             candidates = with_website
+
+        # Shuffle to add variety between runs with same params
+        random.shuffle(candidates)
 
         # Rank: prioritize by proximity if coordinates available
         if request.latitude and request.longitude:
@@ -118,31 +142,9 @@ class DiscoveryService:
                 candidates, request.latitude, request.longitude
             )
 
-        # Convert to Leads and save
+        # Save NEW leads only
         leads = []
-        db = get_database()
         for result in candidates[:request.max_results]:
-            # Check if lead already exists by website URL or company name
-            existing_leads = db.get_all_leads()
-            already_exists = any(
-                (el.website_url == result.website_url and result.website_url)
-                or el.company_name.lower() == result.company_name.lower()
-                for el in existing_leads
-            )
-            if already_exists:
-                # Find and reuse existing lead
-                existing = next(
-                    (el for el in existing_leads
-                     if (el.website_url == result.website_url and result.website_url)
-                     or el.company_name.lower() == result.company_name.lower()),
-                    None,
-                )
-                if existing:
-                    existing.add_log(f"Re-discovered via {result.source}")
-                    db.save_lead(existing)
-                    leads.append(existing)
-                continue
-
             lead = Lead(
                 company_name=result.company_name,
                 website_url=result.website_url,
@@ -159,7 +161,7 @@ class DiscoveryService:
             lead = db.save_lead(lead)
             leads.append(lead)
 
-        logger.info(f"Discovery complete: {len(leads)} leads saved")
+        logger.info(f"Discovery complete: {len(leads)} NEW leads saved")
         return leads
 
     def _sort_by_proximity(

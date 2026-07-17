@@ -69,32 +69,49 @@ Respond in JSON format:
 }}
 """
 
-HTML_GENERATION_PROMPT = """Generate a complete, modern, responsive HTML landing page for this business.
+HTML_GENERATION_PROMPT = """You are a senior designer at a boutique web studio, not a template generator.
+Generate a complete, modern, responsive HTML landing page for this business that could pass as a
+$5,000+ commissioned redesign, not a generic "business website template #4".
 
 Business: {company_name}
 Industry: {industry}
 Location: {location}
 Website issues: {design_problems}
 
-Style direction based on our past work:
-- Colors: {color_palette}
-- Typography: {typography}
+MANDATORY STYLE REQUIREMENTS (you MUST follow these exactly — they come from real design screenshots the developer has created for similar businesses):
+- Primary color palette: {color_palette} — use these as your main colors for backgrounds, text, buttons, and accents
+- Typography: {typography} — load this SPECIFIC font from Google Fonts and use it for headings
 - Layout style: {layout_style}
-- Mood: {mood}
-- Patterns to use: {design_patterns}
+- Mood/feel: {mood}
+- Design patterns to implement: {design_patterns}
+- These style traits were extracted from the developer's actual past work for this industry. Follow them closely.
 
-Requirements:
+Design quality bar — avoid these "AI template" tells:
+- No centered-text-on-a-flat-gradient hero with a single stock photo behind it at 30% opacity. Instead
+  vary hero composition: asymmetric split layouts, oversized type as a graphic element, offset image
+  crops, layered shapes, or a bold single-color hero with strong typography doing the work.
+- No uniform 3-equal-column card grids as the only layout technique. Mix section rhythms: full-bleed
+  bands, asymmetric two-column splits, staggered/offset cards, pull quotes, varied vertical spacing.
+- No default system fonts (Arial/Helvetica/Roboto) — the specified font must actually load and be visibly
+  used for every heading.
+- No safe-but-boring color use (navy-on-white, one grey, one blue). Use the given palette boldly: color
+  blocks, duotone-style overlays, colored section backgrounds — not just as tiny accent dots.
+- Real, generous whitespace and a clear typographic hierarchy (one dominant display size, not five
+  similar-sized headings).
+
+Image policy (follow exactly — broken or irrelevant images are an automatic failure):
+{image_instructions}
+
+Technical requirements:
 - Single HTML file with inline CSS and minimal inline JS
-- Mobile-first responsive design
-- Modern, clean layout
-- Clear hero section with compelling headline
-- Service/product highlights section
-- Trust signals (testimonials or reviews)
-- Clear call-to-action
-- Contact information and location
+- Mobile-first responsive design using CSS Grid or Flexbox
+- Use the EXACT colors listed above for hero backgrounds, buttons, and section accents
+- Load the specified font from Google Fonts CDN and apply it to headings
+- Service/product highlights in a layout that fits the content, not forced into identical boxes
+- At least one testimonial section (mark as placeholder/sample)
+- Clear call-to-action buttons using the accent color
+- Contact section with address and phone
 - Footer with business hours
-- Use Google Fonts via CDN link
-- Use placeholder images from picsum.photos or similar
 
 Generate ONLY the complete HTML code, no explanation.
 """
@@ -144,6 +161,17 @@ Check specifically for:
 4. Missing viewport meta tag or non-responsive layout (bad)
 5. Dead or fabricated links (e.g. guessed email addresses, href="#") (bad)
 6. Layout/section structure generic-looking rather than tailored to the industry (bad)
+7. Using default/generic fonts like Roboto or system fonts instead of a specific design font (bad)
+8. Using bland colors (#333, #fff only) instead of a distinctive branded color palette (bad)
+9. No gradient, accent color, or visual flair in the hero section (bad)
+10. No CSS Grid or modern layout techniques (bad — plain stacked divs look dated)
+11. Fidelity to the attached reference design image(s): does this page's composition, spacing, type
+    scale, and overall polish genuinely resemble the caliber and structure of the references — or does
+    it look like a generic centered-hero-plus-three-cards AI template regardless of the colors used?
+    Be specific about what differs (e.g. "reference uses an asymmetric hero with oversized type; this
+    page uses a centered generic hero") (bad if it doesn't resemble the references)
+12. Broken or placeholder images: any <img> pointing at a path/service other than the exact local
+    "images/..." filenames provided, or an <img> at all when none were provided (bad — automatic fail)
 
 Respond in JSON format:
 {{

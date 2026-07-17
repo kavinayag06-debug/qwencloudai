@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 
 from app.agents.pipeline import AgentPipeline
+from app.config import get_settings
 from app.core.models import LeadStatus, DiscoveryRequest
 from app.storage.database import get_database
 
@@ -101,23 +102,49 @@ async def reject_lead(lead_id: str):
 
 @router.post("/run-pipeline", response_class=HTMLResponse)
 async def run_pipeline_action(request: Request):
-    """Run the full pipeline from the dashboard."""
+    """Run the full pipeline from the dashboard with optional geolocation."""
+    form = await request.form()
+    lat = form.get("latitude")
+    lng = form.get("longitude")
+
+    settings = get_settings()
+    discovery_request = DiscoveryRequest(
+        location=settings.default_location,
+        country=settings.default_country,
+        max_results=settings.max_leads,
+        latitude=float(lat) if lat else None,
+        longitude=float(lng) if lng else None,
+    )
+
     pipeline = _get_pipeline()
-    leads = await pipeline.run_full_pipeline()
+    await pipeline.run_full_pipeline(discovery_request)
     return RedirectResponse(url="/", status_code=303)
 
 
 @router.post("/run-discovery", response_class=HTMLResponse)
 async def run_discovery_action(request: Request):
-    """Run discovery only."""
+    """Run discovery only with optional geolocation."""
+    form = await request.form()
+    lat = form.get("latitude")
+    lng = form.get("longitude")
+
+    settings = get_settings()
+    discovery_request = DiscoveryRequest(
+        location=settings.default_location,
+        country=settings.default_country,
+        max_results=settings.max_leads,
+        latitude=float(lat) if lat else None,
+        longitude=float(lng) if lng else None,
+    )
+
     pipeline = _get_pipeline()
-    await pipeline.run_discovery_only()
+    await pipeline.run_discovery_only(discovery_request)
     return RedirectResponse(url="/", status_code=303)
 
 
 @router.get("/leads/{lead_id}/preview", response_class=HTMLResponse)
 async def preview_html(lead_id: str):
-    """Preview the generated HTML."""
+    """Preview the generated HTML with image paths rewritten for web serving."""
     db = get_database()
     lead = db.get_lead(lead_id)
     if not lead or not lead.html_path:
@@ -127,7 +154,43 @@ async def preview_html(lead_id: str):
     if not html_path.exists():
         raise HTTPException(status_code=404, detail="HTML file not found")
 
-    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+    html_content = html_path.read_text(encoding="utf-8")
+
+    # Rewrite relative image paths (e.g. "images/photo_1.jpg") to our serving endpoint
+    html_content = html_content.replace(
+        'src="images/',
+        f'src="/leads/{lead_id}/images/'
+    )
+    html_content = html_content.replace(
+        "src='images/",
+        f"src='/leads/{lead_id}/images/"
+    )
+
+    return HTMLResponse(content=html_content)
+
+
+@router.get("/leads/{lead_id}/images/{filename}")
+async def serve_lead_image(lead_id: str, filename: str):
+    """Serve images from a lead's output/images folder."""
+    db = get_database()
+    lead = db.get_lead(lead_id)
+    if not lead or not lead.html_path:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    # Images are stored in the same directory as the HTML, under images/
+    lead_dir = Path(lead.html_path).parent
+    image_path = lead_dir / "images" / filename
+
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # Determine media type
+    suffix = image_path.suffix.lower()
+    media_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                   ".webp": "image/webp", ".gif": "image/gif"}
+    media_type = media_types.get(suffix, "image/jpeg")
+
+    return FileResponse(path=str(image_path), media_type=media_type)
 
 
 @router.get("/leads/{lead_id}/download")

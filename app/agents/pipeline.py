@@ -2,10 +2,10 @@
 Agent Pipeline - orchestrates the full redesign workflow.
 
 Steps:
-1. Analyze design references
-2. Run discovery
+1. Run discovery (returns only new leads)
+2. For each lead: analyze design references for that industry
 3. Analyze each target site
-4. Generate HTML redesign
+4. Generate HTML redesign (informed by industry-specific references)
 5. Render screenshots
 6. Package zip
 7. Draft emails
@@ -45,7 +45,8 @@ class AgentPipeline:
         """
         Run the complete agent pipeline end-to-end.
 
-        Returns the list of processed leads.
+        Only processes the NEWLY discovered leads from this run,
+        not previously existing leads in the database.
         """
         settings = get_settings()
 
@@ -58,13 +59,8 @@ class AgentPipeline:
 
         logger.info(f"=== Starting full pipeline for {request.location} ===")
 
-        # Step 1: Analyze design references
-        logger.info("Step 1: Analyzing design references...")
-        style_traits = await self.design_analyzer.analyze_references()
-        logger.info(f"Style traits: {style_traits.mood}, {len(style_traits.color_palette)} colors")
-
-        # Step 2: Run discovery
-        logger.info("Step 2: Running discovery...")
+        # Step 1: Run discovery (returns only new/updated leads from this run)
+        logger.info("Step 1: Running discovery...")
         leads = await self.discovery_service.run_discovery(request)
         logger.info(f"Discovered {len(leads)} leads")
 
@@ -72,26 +68,28 @@ class AgentPipeline:
             logger.warning("No leads discovered. Pipeline complete.")
             return []
 
-        # Step 3-7: Process each lead
+        # Step 2-7: Process each newly discovered lead
         processed_leads = []
         for i, lead in enumerate(leads):
             logger.info(f"Processing lead {i+1}/{len(leads)}: {lead.company_name}")
-            lead = await self._process_lead(lead, style_traits)
+            lead = await self._process_lead(lead)
             processed_leads.append(lead)
 
         logger.info(f"=== Pipeline complete: {len(processed_leads)} leads processed ===")
         return processed_leads
 
-    async def _process_lead(self, lead: Lead, style_traits) -> Lead:
-        """Process a single lead through the full pipeline."""
+    async def _process_lead(self, lead: Lead) -> Lead:
+        """Process a single lead through the full pipeline with industry-specific style."""
         try:
-            # Attach style traits
+            # Step 2: Analyze design references FOR THIS INDUSTRY
+            logger.info(f"Analyzing design references for industry: {lead.industry}")
+            style_traits = await self.design_analyzer.analyze_for_industry(lead.industry)
             lead.style_traits = style_traits
 
             # Step 3: Analyze website
             lead = await self.site_analyzer.analyze(lead)
 
-            # Step 4: Generate HTML
+            # Step 4: Generate HTML (uses industry-specific style traits)
             lead = await self.html_generator.generate(lead, style_traits)
 
             # Step 5: Render screenshots
@@ -131,5 +129,4 @@ class AgentPipeline:
         if not lead:
             return None
 
-        style_traits = await self.design_analyzer.analyze_references()
-        return await self._process_lead(lead, style_traits)
+        return await self._process_lead(lead)

@@ -35,6 +35,14 @@ class ZipPackager:
                     if ss_path.exists():
                         zf.write(ss_path, f"screenshots/{ss_path.name}")
 
+                # Add the real business photos referenced by index.html (images/*)
+                # so the zip is never shipped with dangling <img src="images/..."> paths.
+                images_dir = output_dir / "images"
+                if images_dir.is_dir():
+                    for img_path in images_dir.iterdir():
+                        if img_path.is_file():
+                            zf.write(img_path, f"images/{img_path.name}")
+
             lead.zip_path = str(zip_path)
             lead.add_log(f"Zip package created: {zip_path.name}")
 

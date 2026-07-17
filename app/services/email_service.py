@@ -53,6 +53,11 @@ class EmailService:
                 json_mode=True,
             )
             data = response.as_json()
+            # Handle case where model returns a list instead of dict
+            if isinstance(data, list) and len(data) > 0:
+                data = data[0] if isinstance(data[0], dict) else {}
+            if not isinstance(data, dict):
+                data = {}
             lead.email_subject = data.get("subject", f"A fresh look for {lead.company_name}'s website")
             lead.email_body = data.get("body", self._fallback_email_body(lead))
         except Exception as e:
