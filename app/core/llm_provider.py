@@ -20,6 +20,31 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# API key values that mean "not actually configured": blank, or the committed
+# .env.example placeholder copied verbatim into a machine-local .env.
+PLACEHOLDER_API_KEYS = {"", "your-api-key-here"}
+
+
+def llm_unconfigured_reason() -> Optional[str]:
+    """Why the configured LLM cannot produce real AI output, or None if it looks usable.
+
+    Mock mode is a legitimate setup for tests, but its output is canned text, so it
+    still counts as "no real AI" for callers deciding whether to warn the operator.
+    """
+    settings = get_settings()
+    if settings.llm_provider == "mock":
+        return (
+            "LLM_PROVIDER is 'mock' — all LLM output is canned test text, not real AI. "
+            "Set LLM_PROVIDER and LLM_API_KEY in .env to use a real provider."
+        )
+    if settings.llm_api_key.strip() in PLACEHOLDER_API_KEYS:
+        return (
+            f"LLM_PROVIDER is '{settings.llm_provider}' but LLM_API_KEY is blank or the "
+            "'your-api-key-here' placeholder — LLM calls will fail. "
+            "Set a real LLM_API_KEY in .env."
+        )
+    return None
+
 
 class LLMResponse:
     """Standardized response from any LLM provider."""

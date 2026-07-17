@@ -14,7 +14,7 @@ from pathlib import Path
 import httpx
 
 from app.config import get_settings
-from app.core.llm_provider import get_llm_provider, get_vision_provider, build_image_content_parts
+from app.core.llm_provider import get_llm_provider, get_vision_provider, build_image_content_parts, llm_unconfigured_reason
 from app.core.models import Lead, LeadStatus, StyleTraits
 from app.core.prompts import HTML_GENERATION_PROMPT, DESIGN_PLAN_PROMPT, HTML_CRITIQUE_PROMPT, HTML_REVISION_PROMPT
 from app.core.scoring import compute_confidence
@@ -174,7 +174,15 @@ class HTMLGenerator:
         lead_dir = settings.output_dir / lead.id
         local_images = await self._prepare_images(lead, lead_dir)
 
+        # Check if AI is actually configured — if not, warn loudly and use fallback
+        unconfigured = llm_unconfigured_reason()
+        fallback_reason = None
+
         try:
+            if unconfigured:
+                fallback_reason = f"AI NOT CONFIGURED: {unconfigured}"
+                raise RuntimeError(fallback_reason)
+
             brief = await self._plan(llm, lead, style_traits)
 
             html_content = await self._build(vision, lead, style_traits, brief, reference_images, local_images)
@@ -199,18 +207,26 @@ class HTMLGenerator:
                 html_content = await self._revise(llm, lead, html_content, issues)
 
             if best_html is None:
-                logger.warning("LLM did not return valid HTML, using industry-specific fallback")
+                fallback_reason = "LLM did not return valid HTML"
                 html_content = self._generate_fallback_html(lead, style_traits)
-                quality_score = 50  # fallback is a known-decent static template, not critic-scored
+                quality_score = 50
             else:
                 html_content = best_html
                 quality_score = max(best_score, 0)
 
         except Exception as e:
+            if not fallback_reason:
+                fallback_reason = f"LLM call failed: {e}"
             logger.error(f"HTML generation failed: {e}")
             lead.add_log(f"HTML generation failed: {str(e)}")
             html_content = self._generate_fallback_html(lead, style_traits)
             quality_score = 50
+
+        # Loud logging when fallback is used
+        if fallback_reason:
+            warn_msg = f"NOT an AI-generated design — {fallback_reason}"
+            logger.warning(warn_msg)
+            lead.add_log(f"AI not configured or failed: using fallback template. This is NOT an AI-generated design.")
 
         # Save HTML file
         lead_dir.mkdir(parents=True, exist_ok=True)

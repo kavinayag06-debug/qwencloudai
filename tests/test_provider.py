@@ -12,6 +12,7 @@ os.environ["VISION_PROVIDER"] = "mock"
 from app.core.llm_provider import (
     get_llm_provider,
     get_vision_provider,
+    llm_unconfigured_reason,
     MockProvider,
     OpenAICompatibleProvider,
     LLMResponse,
@@ -105,3 +106,36 @@ def test_provider_switching_by_env():
     provider = get_llm_provider()
     assert isinstance(provider, MockProvider)
     config_module._settings = None
+
+
+def test_unconfigured_reason_for_mock_provider(monkeypatch):
+    """Mock mode is reported as 'no real AI' with fix instructions."""
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    reason = llm_unconfigured_reason()
+    assert reason is not None
+    assert "mock" in reason
+    assert "LLM_API_KEY" in reason
+
+
+def test_unconfigured_reason_for_placeholder_key(monkeypatch):
+    """A real provider with the .env.example placeholder key counts as unconfigured."""
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_API_KEY", "your-api-key-here")
+    reason = llm_unconfigured_reason()
+    assert reason is not None
+    assert "LLM_API_KEY" in reason
+
+
+def test_unconfigured_reason_for_blank_key(monkeypatch):
+    """A real provider with a blank key counts as unconfigured."""
+    monkeypatch.setenv("LLM_PROVIDER", "qwen")
+    monkeypatch.setenv("LLM_API_KEY", "")
+    reason = llm_unconfigured_reason()
+    assert reason is not None
+
+
+def test_unconfigured_reason_none_when_configured(monkeypatch):
+    """A real provider with a real-looking key is considered configured."""
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_API_KEY", "sk-real-key")
+    assert llm_unconfigured_reason() is None

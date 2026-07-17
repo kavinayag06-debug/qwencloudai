@@ -74,6 +74,10 @@ async def test_discovery_ranking_by_proximity(tmp_path):
     config_module._settings = None
     db_module._db = None
 
+    # Clear existing leads so mock results aren't excluded as duplicates
+    from app.storage.database import get_database
+    get_database().clear_all()
+
     service = DiscoveryService()
     request = DiscoveryRequest(
         location="Singapore",
