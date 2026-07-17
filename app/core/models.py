@@ -105,6 +105,8 @@ class Lead(BaseModel):
     industry: str = ""
     location: str = ""
     address: str = ""
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     phone: str = ""
     email: str = ""
     description: str = ""

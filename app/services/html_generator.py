@@ -403,6 +403,24 @@ class HTMLGenerator:
                 brief_text.append(f"Meta description: {brief['meta_description']}")
             prompt += "\n\nContent brief (use this specific content, not generic filler):\n" + "\n".join(brief_text)
 
+        # Add map instructions if coordinates are available
+        settings = get_settings()
+        if lead.latitude and lead.longitude and settings.mapbox_api_key:
+            prompt += f"""
+
+INTERACTIVE MAP (REQUIRED): Include a Mapbox GL JS map in the contact/location section.
+Use this exact code snippet:
+<div id="map" style="width:100%;height:300px;border-radius:12px;margin-top:1.5rem;"></div>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+<script>
+mapboxgl.accessToken='{settings.mapbox_api_key}';
+var map=new mapboxgl.Map({{container:'map',style:'mapbox://styles/mapbox/streets-v12',center:[{lead.longitude},{lead.latitude}],zoom:15}});
+map.addControl(new mapboxgl.NavigationControl());
+new mapboxgl.Marker().setLngLat([{lead.longitude},{lead.latitude}]).addTo(map);
+</script>
+Place the map div INSIDE the contact section, after the address text."""
+
         content_parts = [{"type": "text", "text": prompt}]
         if reference_images:
             content_parts.append({

@@ -151,6 +151,8 @@ class DiscoveryService:
                 industry=result.industry,
                 location=result.location,
                 address=result.address,
+                latitude=result.latitude,
+                longitude=result.longitude,
                 phone=result.phone,
                 email=result.email,
                 description=result.description,

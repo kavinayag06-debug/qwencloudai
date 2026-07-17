@@ -1,6 +1,38 @@
 """Fallback HTML layouts - structurally different per industry."""
 
+from app.config import get_settings
 from app.core.models import Lead, StyleTraits
+
+
+def _build_map_html(lead: Lead) -> str:
+    """Build an interactive Mapbox map embed or a static Google Maps image fallback."""
+    settings = get_settings()
+    lat = lead.latitude
+    lng = lead.longitude
+
+    # If no coordinates, can't show a map
+    if not lat or not lng:
+        return ""
+
+    # Prefer Mapbox interactive map if key is available
+    if settings.mapbox_api_key:
+        token = settings.mapbox_api_key
+        return f"""<div id="map" style="width:100%;height:300px;border-radius:12px;margin-top:1.5rem;"></div>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+<script>
+mapboxgl.accessToken='{token}';
+var map=new mapboxgl.Map({{container:'map',style:'mapbox://styles/mapbox/streets-v12',center:[{lng},{lat}],zoom:15}});
+map.addControl(new mapboxgl.NavigationControl());
+new mapboxgl.Marker().setLngLat([{lng},{lat}]).addTo(map);
+</script>"""
+
+    # Fallback: static Google Maps embed image
+    if settings.google_maps_api_key:
+        key = settings.google_maps_api_key
+        return f'<img src="https://maps.googleapis.com/maps/api/staticmap?center={lat},{lng}&zoom=15&size=600x300&markers=color:red%7C{lat},{lng}&key={key}" alt="Location map" style="width:100%;height:300px;object-fit:cover;border-radius:12px;margin-top:1.5rem;">'
+
+    return ""
 
 
 def generate_fallback(lead: Lead, style_traits: StyleTraits, presets: dict, default: dict) -> str:
@@ -27,6 +59,9 @@ def generate_fallback(lead: Lead, style_traits: StyleTraits, presets: dict, defa
     addr = lead.address or lead.location
     phone = lead.phone or ""
 
+    # Map embed
+    map_html = _build_map_html(lead)
+
     # Client images
     imgs = ""
     if hasattr(lead, 'local_image_paths') and lead.local_image_paths:
@@ -46,10 +81,10 @@ def generate_fallback(lead: Lead, style_traits: StyleTraits, presets: dict, defa
         "grid": _grid,
     }
     fn = layouts.get(layout, _fullwidth)
-    return fn(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs)
+    return fn(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs, map_html)
 
 
-def _fullwidth(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs):
+def _fullwidth(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs, map_html):
     gal = f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;padding:40px 20px;max-width:1100px;margin:0 auto">{imgs}</div>' if imgs else ''
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{name}</title><link href="https://fonts.googleapis.com/css2?family={font.replace(' ','+')}:wght@400;700&display=swap" rel="stylesheet">
@@ -67,11 +102,11 @@ footer{{background:{d};color:#888;padding:24px;text-align:center;font-size:.85re
 {gal}
 <section class="grid"><div class="card"><h3>{svcs[0]}</h3><p>Excellence delivered every time.</p></div><div class="card"><h3>{svcs[1]}</h3><p>Tailored to your needs.</p></div><div class="card"><h3>{svcs[2]}</h3><p>Going above and beyond.</p></div></section>
 <section class="qt"><p>"{quote}"</p><p style="margin-top:1rem;font-weight:600">— Sample review</p></section>
-<section class="ct" id="ct"><h2>Visit Us</h2><p>{addr}</p><p>{phone}</p></section>
+<section class="ct" id="ct"><h2>Visit Us</h2><p>{addr}</p><p>{phone}</p>{map_html}</section>
 <footer>&copy; 2025 {name} &middot; Redesign by QwenCloud AI</footer></body></html>"""
 
 
-def _angular(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs):
+def _angular(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs, map_html):
     gal = f'<div style="display:flex;gap:8px;padding:20px;max-width:1000px;margin:0 auto;overflow:hidden">{imgs}</div>' if imgs else ''
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{name}</title><link href="https://fonts.googleapis.com/css2?family={font.replace(' ','+')}:wght@400;700;900&display=swap" rel="stylesheet">
@@ -87,11 +122,11 @@ footer{{background:#111;color:#555;padding:20px;text-align:center;font-size:.8re
 <section class="hero"><h1>{name}</h1><p>{hero}</p><a href="#cta" class="btn">Join Now</a></section>
 {gal}
 <section class="feats"><div class="ft"><h3>{svcs[0]}</h3><p>Push beyond limits.</p></div><div class="ft"><h3>{svcs[1]}</h3><p>Together we achieve more.</p></div><div class="ft"><h3>{svcs[2]}</h3><p>Always ready.</p></div></section>
-<section class="cta-bar" id="cta"><h2>Ready?</h2><p>{addr} &middot; {phone}</p></section>
+<section class="cta-bar" id="cta"><h2>Ready?</h2><p>{addr} &middot; {phone}</p>{map_html}</section>
 <footer>&copy; 2025 {name} &middot; Redesign by QwenCloud AI</footer></body></html>"""
 
 
-def _minimal(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs):
+def _minimal(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs, map_html):
     gal = f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:40px 0">{imgs}</div>' if imgs else ''
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{name}</title><link href="https://fonts.googleapis.com/css2?family={font.replace(' ','+')}:wght@300;400;600&display=swap" rel="stylesheet">
@@ -109,11 +144,11 @@ def _minimal(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs):
 {gal}
 <ul class="list"><li>{svcs[0]}<span>&rarr;</span></li><li>{svcs[1]}<span>&rarr;</span></li><li>{svcs[2]}<span>&rarr;</span></li></ul>
 <div class="qb"><p>"{quote}"</p><p style="margin-top:10px;font-style:normal;font-size:.85rem">— Sample</p></div>
-<section id="contact"><p>{addr}</p><p>{phone}</p></section>
+<section id="contact"><p>{addr}</p><p>{phone}</p>{map_html}</section>
 <footer class="foot">&copy; 2025 {name} &middot; Redesign by QwenCloud AI</footer></div></body></html>"""
 
 
-def _bold(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs):
+def _bold(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs, map_html):
     gal = f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px;padding:20px">{imgs}</div>' if imgs else ''
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{name}</title><link href="https://fonts.googleapis.com/css2?family={font.replace(' ','+')}:wght@400;700;800&display=swap" rel="stylesheet">
@@ -130,11 +165,11 @@ footer{{padding:20px;text-align:center;font-size:.75rem;opacity:.3}}
 {gal}
 <section class="strip"><div class="si"><h3>{svcs[0]}</h3><p>Confidence starts here.</p></div><div class="si"><h3>{svcs[1]}</h3><p>Expertly crafted.</p></div><div class="si"><h3>{svcs[2]}</h3><p>Elevated style.</p></div></section>
 <section class="td"><p>"{quote}"</p><p style="margin-top:1rem;opacity:.4;font-style:normal">— Sample</p></section>
-<section class="cd" id="cd"><h2>Find Us</h2><p>{addr}</p><p>{phone}</p></section>
+<section class="cd" id="cd"><h2>Find Us</h2><p>{addr}</p><p>{phone}</p>{map_html}</section>
 <footer>&copy; 2025 {name} &middot; Redesign by QwenCloud AI</footer></body></html>"""
 
 
-def _split(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs):
+def _split(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs, map_html):
     gal = f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;padding:40px;max-width:1100px;margin:0 auto">{imgs}</div>' if imgs else ''
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{name}</title><link href="https://fonts.googleapis.com/css2?family={font.replace(' ','+')}:wght@300;400;600;700&display=swap" rel="stylesheet">
@@ -152,11 +187,11 @@ footer{{padding:20px;text-align:center;font-size:.8rem;color:#aaa}}
 <section class="split"><div class="st"><h1>{name}</h1><p>{hero}</p><a href="#bot" class="btn">Explore</a></div><div class="sv"></div></section>
 {gal}
 <section class="feats"><div class="ft"><h3>{svcs[0]}</h3><p>Nature's finest.</p></div><div class="ft"><h3>{svcs[1]}</h3><p>Fresh and seasonal.</p></div><div class="ft"><h3>{svcs[2]}</h3><p>Memorable moments.</p></div></section>
-<section class="bot" id="bot"><p class="q">"{quote}"</p><p>{addr} &middot; {phone}</p></section>
+<section class="bot" id="bot"><p class="q">"{quote}"</p><p>{addr} &middot; {phone}</p>{map_html}</section>
 <footer>&copy; 2025 {name} &middot; Redesign by QwenCloud AI</footer></body></html>"""
 
 
-def _warm(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs):
+def _warm(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs, map_html):
     gal = f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;padding:20px;max-width:900px;margin:0 auto">{imgs}</div>' if imgs else ''
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{name}</title><link href="https://fonts.googleapis.com/css2?family={font.replace(' ','+')}:wght@400;700&family=Inter:wght@400&display=swap" rel="stylesheet">
@@ -175,11 +210,11 @@ footer{{text-align:center;padding:20px;font-size:.8rem;color:#bbb}}
 {gal}
 <section class="menu"><h2>Our Specialties</h2><div class="mg"><div class="mc"><h3>{svcs[0]}</h3><p>Made with love daily.</p></div><div class="mc"><h3>{svcs[1]}</h3><p>For special celebrations.</p></div><div class="mc"><h3>{svcs[2]}</h3><p>A treat for any moment.</p></div></div></section>
 <div class="wb"><p>"{quote}"</p><p style="margin-top:10px;font-style:normal;font-weight:600;color:{p}">— Sample</p></div>
-<section class="visit" id="contact"><h2>Come Say Hello</h2><p>{addr}</p><p>{phone}</p></section>
+<section class="visit" id="contact"><h2>Come Say Hello</h2><p>{addr}</p><p>{phone}</p>{map_html}</section>
 <footer>&copy; 2025 {name} &middot; Redesign by QwenCloud AI</footer></body></html>"""
 
 
-def _editorial(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs):
+def _editorial(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs, map_html):
     gal = f'<div style="columns:2;gap:12px;padding:40px 20px;max-width:900px;margin:0 auto">{imgs}</div>' if imgs else ''
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{name}</title><link href="https://fonts.googleapis.com/css2?family={font.replace(' ','+')}:wght@400;700&display=swap" rel="stylesheet">
@@ -195,11 +230,11 @@ footer{{padding:20px;text-align:center;font-size:.8rem;color:#aaa}}
 <section class="hero"><div><h1>{name}</h1><p>{hero}</p></div></section>
 {gal}
 <section class="row"><div><h2>{svcs[0]}</h2><p>Curated with an editorial eye.</p></div><div class="row-r"><h2>{svcs[1]}</h2><p>For those who appreciate the finer details.</p></div></section>
-<section class="ft" id="contact"><h2>Visit</h2><p>{addr} &middot; {phone}</p></section>
+<section class="ft" id="contact"><h2>Visit</h2><p>{addr} &middot; {phone}</p>{map_html}</section>
 <footer>&copy; 2025 {name} &middot; Redesign by QwenCloud AI</footer></body></html>"""
 
 
-def _clean(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs):
+def _clean(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs, map_html):
     """Medical/clinic style - clean, lots of white, trust-focused."""
     gal = f'<div style="display:flex;gap:16px;padding:40px 20px;max-width:1000px;margin:0 auto;overflow-x:auto">{imgs}</div>' if imgs else ''
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
@@ -220,11 +255,11 @@ footer{{padding:20px;text-align:center;font-size:.8rem;color:#bbb}}
 {gal}
 <section class="trust"><div class="trust-item"><strong>15+</strong>Years Experience</div><div class="trust-item"><strong>5000+</strong>Patients Served</div><div class="trust-item"><strong>4.9</strong>Rating</div></section>
 <section class="services-clean"><div class="sc"><div class="sc-dot"></div><h3>{svcs[0]}</h3></div><div class="sc"><div class="sc-dot"></div><h3>{svcs[1]}</h3></div><div class="sc"><div class="sc-dot"></div><h3>{svcs[2]}</h3></div></section>
-<section class="contact-clean" id="contact"><h2>Visit Us</h2><p>{addr}</p><p>{phone}</p></section>
+<section class="contact-clean" id="contact"><h2>Visit Us</h2><p>{addr}</p><p>{phone}</p>{map_html}</section>
 <footer>&copy; 2025 {name} &middot; Redesign by QwenCloud AI</footer></body></html>"""
 
 
-def _grid(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs):
+def _grid(name, p, s, a, d, font, hero, svcs, quote, addr, phone, imgs, map_html):
     """Retail/product grid style."""
     gal = f'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;padding:20px;max-width:1000px;margin:0 auto">{imgs}</div>' if imgs else ''
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
@@ -244,4 +279,4 @@ footer{{background:{d};color:#888;padding:24px;text-align:center;font-size:.8rem
 {gal}
 <section class="products"><div class="prod"><h3>{svcs[0]}</h3><p>Hand-picked quality.</p><p class="price">View &rarr;</p></div><div class="prod"><h3>{svcs[1]}</h3><p>Expert recommendations.</p><p class="price">View &rarr;</p></div><div class="prod"><h3>{svcs[2]}</h3><p>Delivered to your door.</p><p class="price">View &rarr;</p></div></section>
 <section class="info"><p>"{quote}"</p></section>
-<footer id="contact"><p>{addr} &middot; {phone}</p><p>&copy; 2025 {name} &middot; Redesign by QwenCloud AI</p></footer></body></html>"""
+<footer id="contact"><p>{addr} &middot; {phone}</p>{map_html}<p>&copy; 2025 {name} &middot; Redesign by QwenCloud AI</p></footer></body></html>"""
