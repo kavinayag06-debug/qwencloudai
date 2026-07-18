@@ -18,6 +18,14 @@
 </div>
 <p class="geo-status" id="geo-status" style="font-size:0.8rem;color:#64748b;margin-bottom:1rem;"></p>
 
+{% if pipeline_running %}
+<div class="pipeline-banner" style="background:#fef3c7;color:#92400e;padding:0.75rem 1rem;border-radius:6px;margin-bottom:1rem;">
+    Pipeline running in the background — this page refreshes automatically every 5s.
+    Lead statuses below update as each stage completes.
+</div>
+<script>setTimeout(function() { location.reload(); }, 5000);</script>
+{% endif %}
+
 <script>
 (function() {
     if (navigator.geolocation) {

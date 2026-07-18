@@ -16,7 +16,7 @@ from email import encoders
 from pathlib import Path
 
 from app.config import get_settings
-from app.core.llm_provider import get_llm_provider
+from app.core.llm_provider import get_llm_provider, llm_unconfigured_reason
 from app.core.models import Lead, LeadStatus
 from app.core.prompts import EMAIL_DRAFT_PROMPT
 from app.core.scoring import compute_confidence
@@ -32,6 +32,11 @@ class EmailService:
         """Generate an email draft for the lead. Does NOT send."""
         logger.info(f"Drafting email for {lead.company_name}")
         lead.add_log("Drafting outreach email")
+
+        unconfigured = llm_unconfigured_reason()
+        if unconfigured:
+            logger.warning(f"NOT an AI-drafted email for {lead.company_name} — {unconfigured}")
+            lead.add_log(f"AI not configured: using generic email template. Reason: {unconfigured}")
 
         design_problems = ", ".join(
             lead.website_analysis.design_problems[:5] if lead.website_analysis else ["outdated design"]

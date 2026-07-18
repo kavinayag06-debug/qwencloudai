@@ -67,6 +67,32 @@ async def test_discovery_service_returns_leads(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_mock_discovery_returns_leads_on_repeated_runs(tmp_path):
+    """Mock mode must not treat its own fixed businesses as duplicates across
+    runs — MockConnector always returns the same set, so excluding "already
+    discovered" leads would make every run after the first return nothing."""
+    import app.config as config_module
+    import app.storage.database as db_module
+    config_module._settings = None
+    db_module._db = None
+
+    from app.storage.database import get_database
+    get_database().clear_all()
+
+    service = DiscoveryService()
+    request = DiscoveryRequest(location="Singapore", max_results=5)
+
+    first = await service.run_discovery(request)
+    second = await service.run_discovery(request)
+
+    assert len(first) > 0
+    assert len(second) > 0
+
+    config_module._settings = None
+    db_module._db = None
+
+
+@pytest.mark.asyncio
 async def test_discovery_ranking_by_proximity(tmp_path):
     """Results are ranked by proximity when coordinates provided."""
     import app.config as config_module

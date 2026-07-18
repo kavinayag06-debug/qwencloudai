@@ -25,25 +25,41 @@ logger = logging.getLogger(__name__)
 PLACEHOLDER_API_KEYS = {"", "your-api-key-here"}
 
 
-def llm_unconfigured_reason() -> Optional[str]:
-    """Why the configured LLM cannot produce real AI output, or None if it looks usable.
+def _provider_unconfigured_reason(kind: str, provider: str, api_key: str) -> Optional[str]:
+    """Shared check behind llm_unconfigured_reason/vision_unconfigured_reason.
 
     Mock mode is a legitimate setup for tests, but its output is canned text, so it
     still counts as "no real AI" for callers deciding whether to warn the operator.
     """
-    settings = get_settings()
-    if settings.llm_provider == "mock":
+    if provider == "mock":
         return (
-            "LLM_PROVIDER is 'mock' — all LLM output is canned test text, not real AI. "
-            "Set LLM_PROVIDER and LLM_API_KEY in .env to use a real provider."
+            f"{kind}_PROVIDER is 'mock' — all {kind.lower()} output is canned test text, not real AI. "
+            f"Set {kind}_PROVIDER and {kind}_API_KEY in .env to use a real provider."
         )
-    if settings.llm_api_key.strip() in PLACEHOLDER_API_KEYS:
+    if api_key.strip() in PLACEHOLDER_API_KEYS:
         return (
-            f"LLM_PROVIDER is '{settings.llm_provider}' but LLM_API_KEY is blank or the "
-            "'your-api-key-here' placeholder — LLM calls will fail. "
-            "Set a real LLM_API_KEY in .env."
+            f"{kind}_PROVIDER is '{provider}' but {kind}_API_KEY is blank or the "
+            "'your-api-key-here' placeholder — calls will fail. "
+            f"Set a real {kind}_API_KEY in .env."
         )
     return None
+
+
+def llm_unconfigured_reason() -> Optional[str]:
+    """Why the configured text LLM cannot produce real AI output, or None if it looks usable."""
+    settings = get_settings()
+    return _provider_unconfigured_reason("LLM", settings.llm_provider, settings.llm_api_key)
+
+
+def vision_unconfigured_reason() -> Optional[str]:
+    """Why the configured vision model cannot produce real AI output, or None if it looks usable.
+
+    Separate from llm_unconfigured_reason() because VISION_PROVIDER/VISION_API_KEY are
+    configured independently — a real LLM_PROVIDER doesn't imply vision is usable, and
+    steps that actually call get_vision_provider() (HTML build/critique) need this check.
+    """
+    settings = get_settings()
+    return _provider_unconfigured_reason("VISION", settings.vision_provider, settings.vision_api_key)
 
 
 class LLMResponse:
@@ -55,20 +71,28 @@ class LLMResponse:
         self.raw = raw or {}
 
     def as_json(self) -> dict:
-        """Parse content as JSON, tolerating code fences and leading/trailing prose."""
+        """Parse content as JSON, tolerating code fences and leading/trailing prose.
+
+        Always returns a dict: every current call site expects one, and some models
+        occasionally wrap the object in a top-level JSON array — normalize that here
+        once instead of every caller re-implementing the same guard.
+        """
         content = self.content.strip()
         try:
-            return json.loads(content)
+            parsed = json.loads(content)
         except json.JSONDecodeError:
-            pass
+            # Find the first '{' or '[' and decode from there, ignoring anything
+            # before or after (models often wrap JSON in ```fences``` and commentary).
+            start = next((i for i, ch in enumerate(content) if ch in "{["), None)
+            if start is None:
+                raise json.JSONDecodeError("No JSON object found", content, 0)
+            parsed, _ = json.JSONDecoder().raw_decode(content, start)
 
-        # Find the first '{' or '[' and decode from there, ignoring anything
-        # before or after (models often wrap JSON in ```fences``` and commentary).
-        start = next((i for i, ch in enumerate(content) if ch in "{["), None)
-        if start is None:
-            raise json.JSONDecodeError("No JSON object found", content, 0)
-        obj, _ = json.JSONDecoder().raw_decode(content, start)
-        return obj
+        if isinstance(parsed, list):
+            parsed = parsed[0] if parsed and isinstance(parsed[0], dict) else {}
+        if not isinstance(parsed, dict):
+            parsed = {}
+        return parsed
 
 
 def build_image_content_parts(image_paths: list[Path]) -> list[dict]:

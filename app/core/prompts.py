@@ -86,6 +86,10 @@ MANDATORY STYLE REQUIREMENTS (you MUST follow these exactly — they come from r
 - Design patterns to implement: {design_patterns}
 - These style traits were extracted from the developer's actual past work for this industry. Follow them closely.
 
+Award-winning reference bar for THIS industry — this is the actual caliber to match, not a
+vague "modern" adjective:
+{award_reference}
+
 Design quality bar — avoid these "AI template" tells:
 - No centered-text-on-a-flat-gradient hero with a single stock photo behind it at 30% opacity. Instead
   vary hero composition: asymmetric split layouts, oversized type as a graphic element, offset image
@@ -98,9 +102,39 @@ Design quality bar — avoid these "AI template" tells:
   blocks, duotone-style overlays, colored section backgrounds — not just as tiny accent dots.
 - Real, generous whitespace and a clear typographic hierarchy (one dominant display size, not five
   similar-sized headings).
+- NEVER embed base64-encoded image or SVG data (e.g. `url('data:image/...;base64,...')`) anywhere
+  in the HTML or CSS — it burns thousands of tokens for a barely-visible texture and is the single
+  biggest cause of the output getting cut off mid-page. For decorative shapes, textures, and
+  patterns use pure CSS instead: gradients, clip-path, box-shadow, borders, repeating-linear-gradient,
+  and pseudo-elements. This achieves the same visual richness at near-zero cost.
 
 Image policy (follow exactly — broken or irrelevant images are an automatic failure):
 {image_instructions}
+
+Contact data for this business (use EXACTLY these values — never invent a phone number,
+email address, or booking/ordering URL that isn't listed here):
+- Phone: {phone}
+- Email: {email}
+- Address: {address}
+- Original website: {website_url}
+
+FUNCTIONAL LINKS — MANDATORY (a button that goes nowhere is an automatic failure, worse than
+no button at all). Every <a> or <button> used as a call-to-action must resolve to exactly one
+of these, and nothing else:
+1. Call button → href="tel:{phone}" — only if a phone number is listed above; if none is
+   listed, do not add a call/phone button at all.
+2. Email button → href="mailto:{email}" — only if an email is listed above; if none is
+   listed, do not add an email button at all.
+3. "Get Directions" / "Find Us" button → href="https://www.google.com/maps/search/?api=1&query=<address>"
+   with the address above URL-encoded (spaces as +, commas stripped or encoded).
+4. Same-page nav link (e.g. "Menu", "Services", "Contact") → href="#some-id" where an element
+   with id="some-id" ACTUALLY EXISTS elsewhere in this same HTML document.
+5. Never use href="#" by itself — that is a dead link that does nothing when clicked.
+6. Never invent a booking platform, ordering system, or social media URL you have no real data
+   for. If there's nothing real to link a CTA to, either drop that CTA entirely or point it at
+   the call/email/directions link instead (e.g. "Order by Phone" → tel: link).
+7. Every <button> that acts as a CTA must actually be an <a> tag (or wrap one) with one of the
+   real hrefs above — a bare <button> with no href and no real destination is a dead click.
 
 Technical requirements:
 - Single HTML file with inline CSS and minimal inline JS
@@ -151,6 +185,10 @@ HTML_CRITIQUE_PROMPT = """You are a critical design reviewer for a web agency. R
 for {company_name} ({industry}) against commercial-quality standards. Be strict — this will be sent to a real
 prospective client as a sample of our work.
 
+Award-winning reference bar for THIS industry (judge criterion 11 against this specifically,
+not a generic "looks modern" standard):
+{award_reference}
+
 HTML:
 {html_content}
 
@@ -159,7 +197,13 @@ Check specifically for:
 2. A testimonial presented as a real quote without being marked as a sample (bad)
 3. Missing <title> or meta description (bad)
 4. Missing viewport meta tag or non-responsive layout (bad)
-5. Dead or fabricated links (e.g. guessed email addresses, href="#") (bad)
+5. Non-functional buttons/links — check EVERY <a> and <button> individually:
+   - href="#" with no matching id on the page (dead link, does nothing)
+   - a <button> with no href and no wrapping <a> (dead click)
+   - a mailto:/tel: using an address/number that doesn't match the contact data provided
+   - any fabricated external URL (e.g. example.com, a made-up booking/ordering platform) instead
+     of the required tel:/mailto:/Google Maps directions/same-page-anchor scheme
+   Any single instance of the above is an automatic fail on this criterion.
 6. Layout/section structure generic-looking rather than tailored to the industry (bad)
 7. Using default/generic fonts like Roboto or system fonts instead of a specific design font (bad)
 8. Using bland colors (#333, #fff only) instead of a distinctive branded color palette (bad)
@@ -172,6 +216,8 @@ Check specifically for:
     page uses a centered generic hero") (bad if it doesn't resemble the references)
 12. Broken or placeholder images: any <img> pointing at a path/service other than the exact local
     "images/..." filenames provided, or an <img> at all when none were provided (bad — automatic fail)
+13. Any base64-encoded image/SVG data (`data:image/...;base64,...`) anywhere in the HTML or CSS —
+    always bad, wastes enormous space for a barely-visible effect and risks truncating the page
 
 Respond in JSON format:
 {{

@@ -67,12 +67,21 @@ class DiscoveryService:
         """
         logger.info(f"Starting discovery for {request.location}, max={request.max_results}")
 
-        # Get names of all previously discovered leads to exclude them
+        # Get names of all previously discovered leads to exclude them. Skip this in
+        # mock mode: MockConnector always returns the same fixed businesses, so
+        # excluding "already discovered" ones would make every run after the first
+        # return zero leads — a dev/test dead end, not a real duplicate.
         db = get_database()
-        existing_leads = db.get_all_leads()
-        existing_names = {el.company_name.lower().strip() for el in existing_leads}
-        existing_urls = {el.website_url.lower().strip() for el in existing_leads if el.website_url}
-        logger.info(f"Excluding {len(existing_names)} previously discovered businesses")
+        use_mock = any(isinstance(c, MockConnector) for c in self.connectors)
+        existing_names: set[str] = set()
+        existing_urls: set[str] = set()
+        if use_mock:
+            logger.info("Mock mode: skipping dedup against previously discovered businesses")
+        else:
+            existing_leads = db.get_all_leads()
+            existing_names = {el.company_name.lower().strip() for el in existing_leads}
+            existing_urls = {el.website_url.lower().strip() for el in existing_leads if el.website_url}
+            logger.info(f"Excluding {len(existing_names)} previously discovered businesses")
 
         # Randomize category order each run to get different results
         categories = list(request.categories)
@@ -137,7 +146,7 @@ class DiscoveryService:
         random.shuffle(candidates)
 
         # Rank: prioritize by proximity if coordinates available
-        if request.latitude and request.longitude:
+        if request.latitude is not None and request.longitude is not None:
             candidates = self._sort_by_proximity(
                 candidates, request.latitude, request.longitude
             )

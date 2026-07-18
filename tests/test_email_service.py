@@ -1,5 +1,6 @@
 """Tests for EmailService.approve_and_send recipient routing (C-1)."""
 
+import logging
 import os
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +11,20 @@ os.environ["VISION_PROVIDER"] = "mock"
 
 from app.core.models import Lead, LeadStatus
 from app.services.email_service import EmailService
+
+
+async def test_draft_email_unconfigured_llm_is_loud(caplog):
+    """Drafting with a mock/unconfigured LLM must warn loudly, matching the
+    same "NOT AI-generated" loudness html_generator.generate() has — silently
+    producing a generic canned draft with no warning is the bug being fixed."""
+    lead = Lead(id="lead-2", company_name="Real Biz", industry="bakery", location="Singapore")
+
+    with caplog.at_level(logging.WARNING, logger="app.services.email_service"):
+        result = await EmailService().draft_email(lead)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("NOT an AI-drafted email" in msg for msg in warnings)
+    assert any("AI not configured" in log for log in result.logs)
 
 
 def _make_approved_lead(email: str) -> Lead:

@@ -14,7 +14,7 @@ from pathlib import Path
 import httpx
 
 from app.config import get_settings
-from app.core.llm_provider import get_llm_provider, get_vision_provider, build_image_content_parts, llm_unconfigured_reason
+from app.core.llm_provider import get_llm_provider, get_vision_provider, build_image_content_parts, llm_unconfigured_reason, vision_unconfigured_reason
 from app.core.models import Lead, LeadStatus, StyleTraits
 from app.core.prompts import HTML_GENERATION_PROMPT, DESIGN_PLAN_PROMPT, HTML_CRITIQUE_PROMPT, HTML_REVISION_PROMPT
 from app.core.scoring import compute_confidence
@@ -147,6 +147,57 @@ DEFAULT_PRESET = {
     "layout": "fullwidth",
 }
 
+# What Awwwards/FWA-caliber sites actually look like per industry — a restaurant
+# and a gym shouldn't look like the same template with different colors. Fed
+# into the build/critique prompts so the quality bar is industry-specific, not
+# a generic "avoid AI template tells" note.
+AWARD_REFERENCE_STYLES = {
+    "florist": "Award-winning florist sites use macro close-up photography of texture and "
+    "petals, asymmetric organic layouts that avoid rigid grids, a single elegant script or "
+    "serif display font paired with a minimal sans body, and generous negative space — never "
+    "a stock-photo hero with a bootstrap-style CTA button.",
+    "restaurant": "Award-winning restaurant sites (Michelin-guide caliber) use cinematic "
+    "full-bleed food and interior photography, oversized editorial display type, dark or "
+    "richly-colored sections rather than flat white, and a reservation CTA that feels like an "
+    "invitation, not a form dump.",
+    "cafe": "Top-tier cafe sites lean into warm documentary-style photography of the space and "
+    "drinks, hand-lettered or script accent type against a clean geometric sans, and an "
+    "ingredient/sourcing story section — not a generic 'our menu' grid.",
+    "spa": "Award-winning spa/wellness sites use slow, immersive full-bleed imagery, a muted "
+    "sophisticated palette (stone, sage, warm neutrals), thin elegant serif or high-end sans "
+    "type, and deliberate whitespace that itself communicates calm — busy layouts undercut the "
+    "entire premise.",
+    "salon": "Top salon/beauty sites use bold editorial fashion-magazine composition, large "
+    "confident portrait photography, a striking type pairing (often a heavy display face + "
+    "light body), and a strong signature accent color used decisively, not timidly.",
+    "gym": "Award-winning fitness sites use high-contrast action photography, oversized bold "
+    "uppercase display type, kinetic diagonal or angular section breaks, and a color palette "
+    "that reads as energy, not a pastel gym.",
+    "sports": "Award-winning sports/fitness sites use high-contrast action photography, "
+    "oversized bold uppercase display type, kinetic diagonal or angular section breaks, and a "
+    "color palette that reads as energy and momentum.",
+    "clinic": "Top healthcare/clinic sites use calm generous whitespace, soft rounded geometry, "
+    "real trust-building elements (credentials, outcomes, care philosophy) presented with "
+    "restraint, and warm approachable photography — sterile stock-photo clinical imagery reads "
+    "as generic, not trustworthy.",
+    "bakery": "Award-winning bakery sites use warm natural-light photography of the product "
+    "close-up, a friendly script or hand-drawn accent type against a clean serif/sans body, and "
+    "a 'baked daily' rhythm/story section — never a plain grid of product thumbnails.",
+    "retail": "Top-tier retail/boutique sites use disciplined e-commerce-grade grids, large "
+    "lifestyle photography over plain product shots, minimal chrome/navigation, and confident "
+    "use of negative space between products.",
+    "fashion": "Award-winning fashion/boutique sites use full-bleed editorial photography, a "
+    "striking display typeface at large scale, asymmetric magazine-style layouts, and a "
+    "restrained monochrome-plus-one-accent palette.",
+}
+
+DEFAULT_AWARD_REFERENCE = (
+    "Award-winning small-business sites in general share: oversized confident typography used "
+    "as a design element (not just text), asymmetric or full-bleed layouts instead of "
+    "centered-hero-plus-three-cards, a real color story instead of navy-on-white, and generous "
+    "whitespace with a clear single focal point per section."
+)
+
 
 class HTMLGenerator:
     """Generates HTML landing pages based on analysis and style traits."""
@@ -174,8 +225,10 @@ class HTMLGenerator:
         lead_dir = settings.output_dir / lead.id
         local_images = await self._prepare_images(lead, lead_dir)
 
-        # Check if AI is actually configured — if not, warn loudly and use fallback
-        unconfigured = llm_unconfigured_reason()
+        # Check if AI is actually configured — if not, warn loudly and use fallback.
+        # Both providers matter: _plan/_revise run on `llm`, _build/_critique run on
+        # `vision`, so either being unconfigured means real AI never actually runs.
+        unconfigured = llm_unconfigured_reason() or vision_unconfigured_reason()
         fallback_reason = None
 
         try:
@@ -301,7 +354,9 @@ class HTMLGenerator:
                     ext = content_type.split("/")[-1].split(";")[0].strip() or "jpg"
                     if ext == "jpeg":
                         ext = "jpg"
-                    if ext not in ("jpg", "png", "webp", "gif"):
+                    elif ext == "svg+xml":
+                        ext = "svg"
+                    if ext not in ("jpg", "png", "webp", "gif", "svg"):
                         ext = "jpg"
                     filename = f"photo_{i + 1}.{ext}"
                     (images_dir / filename).write_bytes(resp.content)
@@ -356,6 +411,8 @@ class HTMLGenerator:
         if brief.get("sections"):
             design_patterns = brief["sections"]
 
+        award_reference = AWARD_REFERENCE_STYLES.get(lead.industry.lower().strip(), DEFAULT_AWARD_REFERENCE)
+
         if local_images:
             image_instructions = (
                 f"Real photos of this business are available at these EXACT local paths — "
@@ -382,6 +439,11 @@ class HTMLGenerator:
             mood=style_traits.mood or "professional",
             design_patterns=", ".join(design_patterns) if design_patterns else "hero section, card grid, testimonials, CTA",
             image_instructions=image_instructions,
+            award_reference=award_reference,
+            phone=lead.phone or "not available — do not add a phone/call button",
+            email=lead.email or "not available — do not add an email button",
+            address=lead.address or lead.location,
+            website_url=lead.website_url or "not available",
         )
         if brief:
             brief_text = []
@@ -405,7 +467,7 @@ class HTMLGenerator:
 
         # Add map instructions if coordinates are available
         settings = get_settings()
-        if lead.latitude and lead.longitude and settings.mapbox_api_key:
+        if lead.latitude is not None and lead.longitude is not None and settings.mapbox_api_key:
             prompt += f"""
 
 INTERACTIVE MAP (REQUIRED): Include a Mapbox GL JS map in the contact/location section.
@@ -435,6 +497,9 @@ Place the map div INSIDE the contact section, after the address text."""
             })
             content_parts.extend(build_image_content_parts(reference_images))
 
+        # 8192 is qwen-max's hard max_tokens ceiling (DashScope returns 400
+        # InvalidParameter above it) — don't raise this without checking the
+        # configured model's actual limit first.
         response = await vision.complete(
             messages=[{"role": "user", "content": content_parts}],
             temperature=0.7,
@@ -449,6 +514,7 @@ Place the map div INSIDE the contact section, after the address text."""
             company_name=lead.company_name,
             industry=lead.industry,
             html_content=html_content,
+            award_reference=AWARD_REFERENCE_STYLES.get(lead.industry.lower().strip(), DEFAULT_AWARD_REFERENCE),
         )
         content_parts = [{"type": "text", "text": prompt}]
         if reference_images:
@@ -494,8 +560,12 @@ Place the map div INSIDE the contact section, after the address text."""
 
     @staticmethod
     def _looks_like_html(content: str) -> bool:
+        """True only for a genuinely complete document — a response that starts
+        correctly but got cut off mid-CSS/mid-markup (hitting max_tokens) must not
+        be accepted as "valid HTML" just because it starts with <!DOCTYPE>."""
         lowered = content.strip().lower()
-        return lowered.startswith("<!doctype") or lowered.startswith("<html")
+        starts_ok = lowered.startswith("<!doctype") or lowered.startswith("<html")
+        return starts_ok and lowered.rstrip().endswith("</html>")
 
     def _generate_fallback_html(self, lead: Lead, style_traits: StyleTraits) -> str:
         """Generate industry-specific fallback HTML with varied layouts."""

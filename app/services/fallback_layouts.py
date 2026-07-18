@@ -11,7 +11,7 @@ def _build_map_html(lead: Lead) -> str:
     lng = lead.longitude
 
     # If no coordinates, can't show a map
-    if not lat or not lng:
+    if lat is None or lng is None:
         return ""
 
     # Prefer Mapbox interactive map if key is available
@@ -73,6 +73,9 @@ def generate_fallback(lead: Lead, style_traits: StyleTraits, presets: dict, defa
     layouts = {
         "angular": _angular,
         "minimal": _minimal,
+        # "centered" (used by the spa preset) wants exactly _minimal's narrow,
+        # centered, generously-padded column — no separate template needed.
+        "centered": _minimal,
         "bold": _bold,
         "split": _split,
         "warm": _warm,
