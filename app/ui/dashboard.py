@@ -11,7 +11,7 @@ Provides:
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Request, Form, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 
@@ -27,6 +27,32 @@ templates_dir = Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 
 _pipeline = None
+
+# ponytail: single-process in-memory flag, not a job queue — good enough for a
+# local single-worker dashboard. Resets to False (silently) if the server
+# restarts mid-run; a real deployment would track this in the DB instead.
+_pipeline_status = {"running": False}
+
+
+async def _run_pipeline_in_background(pipeline: AgentPipeline, discovery_request: DiscoveryRequest) -> None:
+    _pipeline_status["running"] = True
+    try:
+        await pipeline.run_full_pipeline(discovery_request)
+    finally:
+        _pipeline_status["running"] = False
+
+
+# Same pattern as _pipeline_status, per-lead: which leads are currently being
+# processed via the single-lead "Process This Lead" button.
+_processing_lead_ids: set[str] = set()
+
+
+async def _process_single_lead_in_background(pipeline: AgentPipeline, lead_id: str) -> None:
+    _processing_lead_ids.add(lead_id)
+    try:
+        await pipeline.process_single_lead(lead_id)
+    finally:
+        _processing_lead_ids.discard(lead_id)
 
 
 def _get_pipeline() -> AgentPipeline:
@@ -49,6 +75,7 @@ async def dashboard_home(request: Request):
     return _render(request, "index.html", {
         "leads": leads,
         "title": "QwenCloud AI - Redesign Agent",
+        "pipeline_running": _pipeline_status["running"],
     })
 
 
@@ -63,7 +90,21 @@ async def lead_detail_page(request: Request, lead_id: str):
     return _render(request, "lead_detail.html", {
         "lead": lead,
         "title": f"{lead.company_name} - Detail",
+        "processing": lead_id in _processing_lead_ids,
     })
+
+
+@router.post("/leads/{lead_id}/process", response_class=HTMLResponse)
+async def process_lead_action(lead_id: str, background_tasks: BackgroundTasks):
+    """Run the full per-lead pipeline (analysis -> HTML -> screenshots -> email) for
+    just this one lead, in the background so the page doesn't hang."""
+    db = get_database()
+    if not db.get_lead(lead_id):
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    pipeline = _get_pipeline()
+    background_tasks.add_task(_process_single_lead_in_background, pipeline, lead_id)
+    return RedirectResponse(url=f"/leads/{lead_id}", status_code=303)
 
 
 @router.post("/leads/{lead_id}/approve", response_class=HTMLResponse)
@@ -101,8 +142,14 @@ async def reject_lead(lead_id: str):
 
 
 @router.post("/run-pipeline", response_class=HTMLResponse)
-async def run_pipeline_action(request: Request):
-    """Run the full pipeline from the dashboard with optional geolocation."""
+async def run_pipeline_action(request: Request, background_tasks: BackgroundTasks):
+    """Kick off the full pipeline in the background and return immediately.
+
+    The pipeline can take many minutes (multiple leads, each several LLM
+    calls) — awaiting it here would leave the browser looking hung with no
+    feedback. Each lead's status is saved to the DB as it progresses, so the
+    dashboard already shows live progress on every refresh.
+    """
     form = await request.form()
     lat = form.get("latitude")
     lng = form.get("longitude")
@@ -117,7 +164,7 @@ async def run_pipeline_action(request: Request):
     )
 
     pipeline = _get_pipeline()
-    await pipeline.run_full_pipeline(discovery_request)
+    background_tasks.add_task(_run_pipeline_in_background, pipeline, discovery_request)
     return RedirectResponse(url="/", status_code=303)
 
 

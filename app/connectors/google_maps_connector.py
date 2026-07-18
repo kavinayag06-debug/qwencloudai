@@ -37,8 +37,8 @@ class GoogleMapsConnector(BaseConnector):
             return []
 
         # Default coordinates for Singapore
-        lat = latitude or 1.3521
-        lng = longitude or 103.8198
+        lat = latitude if latitude is not None else 1.3521
+        lng = longitude if longitude is not None else 103.8198
 
         # Vary the search radius between runs to get different results
         # Google returns different places at different radii

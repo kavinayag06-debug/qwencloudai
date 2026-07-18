@@ -102,6 +102,8 @@ async def test_llm_failure_fallback_is_loud(sample_lead, sample_traits, caplog, 
     """A configured provider whose LLM call fails produces a loud AI-failed warning."""
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_API_KEY", "sk-looks-real-but-invalid")
+    monkeypatch.setenv("VISION_PROVIDER", "openai")
+    monkeypatch.setenv("VISION_API_KEY", "sk-looks-real-but-invalid")
 
     generator = HTMLGenerator()
 

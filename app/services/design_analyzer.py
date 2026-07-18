@@ -39,6 +39,7 @@ INDUSTRY_SCREENSHOT_MAP = {
     "sports": ["sports"],
     "salon": ["fashion"],
     "spa": ["fashion", "florist"],
+    "clinic": ["clinic", "medical", "health"],
 }
 
 
@@ -66,15 +67,10 @@ class DesignAnalyzer:
         relevant_images = self._select_images_for_industry(screenshots_dir, industry)
 
         if not relevant_images:
-            # Fallback: use ALL available screenshots
-            image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-            relevant_images = [
-                f for f in screenshots_dir.iterdir()
-                if f.is_file() and f.suffix.lower() in image_extensions
-            ]
-
-        if not relevant_images:
-            logger.warning(f"No design screenshots found for industry '{industry}'")
+            # No screenshots actually relate to this industry — use generic defaults
+            # rather than showing the vision model unrelated designs (e.g. bakery/
+            # florist photos for a clinic) and having it forge traits from a mismatch.
+            logger.warning(f"No matching design screenshots for industry '{industry}'; using generic defaults")
             traits = self._default_traits(industry)
             self._cache[cache_key] = traits
             return traits
@@ -123,17 +119,13 @@ class DesignAnalyzer:
     def _select_images_for_industry(self, screenshots_dir: Path, industry: str) -> list[Path]:
         """Select screenshots that match the industry based on filename patterns."""
         industry_lower = industry.lower().strip()
-        patterns = INDUSTRY_SCREENSHOT_MAP.get(industry_lower, [])
+        patterns = INDUSTRY_SCREENSHOT_MAP.get(industry_lower, [industry_lower])
 
         image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
         all_images = [
             f for f in screenshots_dir.iterdir()
             if f.is_file() and f.suffix.lower() in image_extensions
         ]
-
-        if not patterns:
-            # No known mapping — try to match industry keyword in filename
-            patterns = [industry_lower]
 
         matched = []
         for img in all_images:
@@ -143,7 +135,11 @@ class DesignAnalyzer:
                     matched.append(img)
                     break
 
-        return matched if matched else all_images
+        # No "else all_images" fallback here on purpose: showing the vision model
+        # every screenshot regardless of industry (e.g. bakery photos for a clinic)
+        # produces style traits with no real relation to the business. The caller
+        # (analyze_for_industry) falls back to generic defaults instead.
+        return matched
 
     def _parse_traits(self, data: dict, industry: str) -> StyleTraits:
         """Parse the vision model response into StyleTraits."""

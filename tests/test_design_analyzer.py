@@ -39,15 +39,16 @@ def test_select_images_for_bakery_includes_dessert(tmp_path):
     assert "fashion.jpg" not in names
 
 
-def test_select_images_falls_back_to_all_when_no_match(tmp_path):
-    """Unknown industry falls back to all available screenshots."""
+def test_select_images_returns_empty_when_no_match(tmp_path):
+    """Unknown industry with no matching screenshots returns nothing — showing
+    unrelated designs (e.g. bakery/fashion photos for a plumber) would produce
+    style traits with no real relation to the business."""
     (tmp_path / "bakery.jpg").write_bytes(b"fake")
     (tmp_path / "fashion.jpg").write_bytes(b"fake")
 
     analyzer = DesignAnalyzer()
     selected = analyzer._select_images_for_industry(tmp_path, "plumbing")
-    # Should return all since no pattern matches
-    assert len(selected) == 2
+    assert selected == []
 
 
 def test_parse_traits_handles_wrapped_response():
