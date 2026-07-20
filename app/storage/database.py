@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import create_engine, Column, String, Integer, Text, DateTime
+from sqlalchemy import create_engine, text, Column, String, Integer, Float, Text, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 from app.config import get_settings
@@ -28,6 +28,8 @@ class LeadRecord(Base):
     industry = Column(String, default="")
     location = Column(String, default="")
     address = Column(String, default="")
+    latitude = Column(Float, default=None)
+    longitude = Column(Float, default=None)
     phone = Column(String, default="")
     email = Column(String, default="")
     description = Column(String, default="")
@@ -39,6 +41,11 @@ class LeadRecord(Base):
     html_path = Column(String, default=None)
     html_quality_score = Column(Integer, default=0)
     screenshot_paths_json = Column(Text, default="[]")
+    source_image_urls_json = Column(Text, default="[]")
+    google_photo_refs_json = Column(Text, default="[]")
+    google_photo_attribution = Column(String, default="")
+    local_image_paths_json = Column(Text, default="[]")
+    image_attributions_json = Column(Text, default="{}")
     email_subject = Column(String, default="")
     email_body = Column(Text, default="")
     zip_path = Column(String, default=None)
@@ -66,7 +73,23 @@ class Database:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
         Base.metadata.create_all(self.engine)
+        self._migrate_missing_columns()
         self.SessionLocal = sessionmaker(bind=self.engine)
+
+    def _migrate_missing_columns(self) -> None:
+        """create_all() only creates new tables, not new columns on an existing
+        one. Add any columns the current LeadRecord defines that an older
+        on-disk DB predates, so existing lead data doesn't need to be wiped
+        every time a field is added."""
+        sql_type = {String: "TEXT", Text: "TEXT", Integer: "INTEGER", Float: "REAL", DateTime: "TEXT"}
+        with self.engine.connect() as conn:
+            existing = {row[1] for row in conn.execute(text("PRAGMA table_info(leads)"))}
+            for col in LeadRecord.__table__.columns:
+                if col.name in existing:
+                    continue
+                col_type = sql_type.get(type(col.type), "TEXT")
+                conn.execute(text(f"ALTER TABLE leads ADD COLUMN {col.name} {col_type}"))
+            conn.commit()
 
     def get_session(self) -> Session:
         return self.SessionLocal()
@@ -88,6 +111,8 @@ class Database:
             record.industry = lead.industry
             record.location = lead.location
             record.address = lead.address
+            record.latitude = lead.latitude
+            record.longitude = lead.longitude
             record.phone = lead.phone
             record.email = lead.email
             record.description = lead.description
@@ -99,6 +124,11 @@ class Database:
             record.email_body = lead.email_body
             record.zip_path = lead.zip_path
             record.screenshot_paths_json = json.dumps(lead.screenshot_paths)
+            record.source_image_urls_json = json.dumps(lead.source_image_urls)
+            record.google_photo_refs_json = json.dumps(lead.google_photo_refs)
+            record.google_photo_attribution = lead.google_photo_attribution
+            record.local_image_paths_json = json.dumps(lead.local_image_paths)
+            record.image_attributions_json = json.dumps(lead.image_attributions)
             record.logs_json = json.dumps(lead.logs)
             record.updated_at = datetime.utcnow()
 
@@ -196,6 +226,8 @@ class Database:
             industry=record.industry,
             location=record.location,
             address=record.address,
+            latitude=record.latitude,
+            longitude=record.longitude,
             phone=record.phone,
             email=record.email,
             description=record.description,
@@ -207,6 +239,11 @@ class Database:
             email_body=record.email_body,
             zip_path=record.zip_path,
             screenshot_paths=json.loads(record.screenshot_paths_json or "[]"),
+            source_image_urls=json.loads(record.source_image_urls_json or "[]"),
+            google_photo_refs=json.loads(record.google_photo_refs_json or "[]"),
+            google_photo_attribution=record.google_photo_attribution or "",
+            local_image_paths=json.loads(record.local_image_paths_json or "[]"),
+            image_attributions=json.loads(record.image_attributions_json or "{}"),
             logs=json.loads(record.logs_json or "[]"),
             created_at=record.created_at,
             updated_at=record.updated_at,

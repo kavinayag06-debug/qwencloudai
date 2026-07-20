@@ -20,6 +20,8 @@ class DiscoveryResult:
         source: str = "",
         latitude: Optional[float] = None,
         longitude: Optional[float] = None,
+        google_photo_refs: Optional[list[str]] = None,
+        google_photo_attribution: str = "",
     ):
         self.company_name = company_name
         self.website_url = website_url
@@ -32,6 +34,12 @@ class DiscoveryResult:
         self.source = source
         self.latitude = latitude
         self.longitude = longitude
+        # Google Places photo "name" references (e.g. "places/X/photos/Y") and a
+        # display-name credit for the first photo's author — used as a fallback
+        # real-photo source when the business's own website has none. Only
+        # GoogleMapsConnector populates these.
+        self.google_photo_refs = google_photo_refs or []
+        self.google_photo_attribution = google_photo_attribution
 
 
 class BaseConnector(ABC):

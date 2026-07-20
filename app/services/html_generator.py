@@ -222,6 +222,7 @@ class HTMLGenerator:
         # (or none at all) — never a hotlinked stock photo or a path that was
         # never created.
         settings = get_settings()
+        await self._backfill_coordinates(lead, settings)
         lead_dir = settings.output_dir / lead.id
         local_images = await self._prepare_images(lead, lead_dir)
 
@@ -322,16 +323,52 @@ class HTMLGenerator:
         offset = seed % len(paths)
         return [paths[(offset + i) % len(paths)] for i in range(MAX_REFERENCE_IMAGES)]
 
-    async def _prepare_images(self, lead: Lead, lead_dir: Path) -> list[str]:
-        """Download real photos from the client's current site into images/.
+    async def _backfill_coordinates(self, lead: Lead, settings) -> None:
+        """Leads discovered before latitude/longitude were tracked (or from
+        connectors that don't return coordinates) have none, so the Mapbox
+        map section in _build() never gets added — the map silently never
+        shows up. Geocode the address once and persist it so this only
+        happens the first time a stale lead is (re)generated."""
+        if lead.latitude is not None and lead.longitude is not None:
+            return
+        if not lead.address or not settings.google_maps_api_key:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    "https://maps.googleapis.com/maps/api/geocode/json",
+                    params={"address": lead.address, "key": settings.google_maps_api_key},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            results = data.get("results", [])
+            if data.get("status") == "OK" and results:
+                loc = results[0]["geometry"]["location"]
+                lead.latitude = loc["lat"]
+                lead.longitude = loc["lng"]
+                get_database().save_lead(lead)
+                lead.add_log("Backfilled coordinates via Geocoding API for map embed")
+            else:
+                logger.warning(f"Geocoding returned no results for '{lead.address}': {data.get('status')}")
+        except Exception as e:
+            logger.warning(f"Geocoding backfill failed for {lead.company_name}: {e}")
 
-        If client images can't be downloaded, falls back to industry-mapped
-        stock images from data/stock_images/. Returns filenames (relative to
-        lead_dir/images/) that were saved successfully.
+    async def _prepare_images(self, lead: Lead, lead_dir: Path) -> list[str]:
+        """Download real photos of this specific business into images/.
+
+        Two real (never fabricated/generic) sources, tried in order:
+        1. The business's own current website (og:image, real <img> tags).
+        2. Google Places photos for this business (owner/visitor-submitted,
+           real photos of the actual place — not generic stock).
+
+        If neither has anything usable, returns empty and the build prompt
+        goes photo-free (CSS-only) rather than using a fake/generic image.
+        Returns filenames (relative to lead_dir/images/) that were saved.
         """
         images_dir = lead_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
         saved: list[str] = []
+        attributions: dict[str, str] = {}
 
         # Step 1: Try to download real photos from the client's website
         if lead.source_image_urls:
@@ -365,18 +402,49 @@ class HTMLGenerator:
                         logger.warning(f"Could not download image {url}: {e}")
                         continue
 
-        # Step 2: If no client images worked, use industry-mapped stock images
-        if not saved:
-            from app.services.stock_images import get_stock_images_for_industry
-            saved = await get_stock_images_for_industry(lead.industry, lead_dir, max_images=3)
-            if saved:
-                lead.add_log(f"Using {len(saved)} stock images (client images unavailable)")
-            else:
-                lead.add_log("No images available (client or stock)")
-        else:
+        if saved:
             lead.add_log(f"Downloaded {len(saved)} real photos from the client's site")
 
+        # Step 2: If the site had nothing, fall back to this business's real
+        # Google Places photos (still real, still specific to this business —
+        # never a generic/stock substitute).
+        settings = get_settings()
+        if not saved and lead.google_photo_refs and settings.google_maps_api_key:
+            credit = f"Photo courtesy of {lead.google_photo_attribution}" if lead.google_photo_attribution else "Photo courtesy of Google users"
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                for i, photo_ref in enumerate(lead.google_photo_refs[:MAX_SOURCE_IMAGES]):
+                    try:
+                        url = f"https://places.googleapis.com/v1/{photo_ref}/media"
+                        resp = await client.get(url, params={
+                            "key": settings.google_maps_api_key,
+                            "maxWidthPx": 1200,
+                        })
+                        if resp.status_code != 200:
+                            continue
+                        content_type = resp.headers.get("content-type", "")
+                        if not content_type.startswith("image/"):
+                            continue
+                        ext = content_type.split("/")[-1].split(";")[0].strip() or "jpg"
+                        if ext == "jpeg":
+                            ext = "jpg"
+                        if ext not in ("jpg", "png", "webp"):
+                            ext = "jpg"
+                        filename = f"gphoto_{i + 1}.{ext}"
+                        (images_dir / filename).write_bytes(resp.content)
+                        saved.append(filename)
+                        attributions[filename] = credit
+                    except Exception as e:
+                        logger.warning(f"Could not download Google Places photo {photo_ref}: {e}")
+                        continue
+
+            if saved:
+                lead.add_log(f"Using {len(saved)} real Google Places photos of this business (client site had none)")
+
+        if not saved:
+            lead.add_log("No real photos available (client site or Google Places); using a photo-free design")
+
         lead.local_image_paths = saved
+        lead.image_attributions = attributions
         return saved
 
     async def _plan(self, llm, lead: Lead, style_traits: StyleTraits) -> dict:
@@ -422,17 +490,27 @@ class HTMLGenerator:
 
         if local_images:
             image_instructions = (
-                f"Photos are available at these EXACT local paths. "
-                f"Use them as src attributes in <img> tags (each image at most once): "
+                f"Real photos of this specific business are available at these EXACT local paths. "
+                f"Use them as src attributes in <img> tags (each image at most once), and no others: "
                 + ", ".join(f'"images/{name}"' for name in local_images)
                 + "\nSet appropriate alt text for each image."
             )
+            attributed = {name: credit for name, credit in lead.image_attributions.items() if name in local_images}
+            if attributed:
+                image_instructions += (
+                    "\nAttribution required (Google Places photo usage terms): directly below each "
+                    "of these images, add a small, unobtrusive caption (e.g. a <small> or "
+                    "<figcaption>, low-contrast, ~0.75rem) with this EXACT text: "
+                    + "; ".join(f'"images/{name}" -> "{credit}"' for name, credit in attributed.items())
+                )
         else:
             image_instructions = (
-                "Use picsum.photos for placeholder images. "
-                "Example: src=\"https://picsum.photos/seed/hero/800/500\" for hero, "
-                "src=\"https://picsum.photos/seed/service1/400/300\" for cards. "
-                "Use a different seed word for each image. Always include alt text."
+                "No real photo of this business is available (checked their own website and Google "
+                "Places). Do NOT use <img> tags, picsum.photos, unsplash, or any other placeholder/"
+                "stock image service — a fake or generic photo is worse than none. Build the visual "
+                "interest entirely from CSS: gradients, color blocks, geometric shapes, subtle "
+                "patterns, and typography, the way the attached reference designs do in their "
+                "non-photo sections."
             )
 
         prompt = HTML_GENERATION_PROMPT.format(
@@ -504,12 +582,13 @@ Place the map div INSIDE the contact section, after the address text."""
             })
             content_parts.extend(build_image_content_parts(reference_images))
 
-        # qwen3.7-max supports up to 16384 output tokens. Use 12000 to give room
-        # for a full HTML page without truncation.
+        # 8192 is qwen-max's hard max_tokens ceiling (DashScope returns 400
+        # InvalidParameter above it) — don't raise this without checking the
+        # configured model's actual limit first.
         response = await vision.complete(
             messages=[{"role": "user", "content": content_parts}],
             temperature=0.7,
-            max_tokens=12000,
+            max_tokens=8192,
         )
         return self._strip_code_fence(response.content)
 
@@ -550,7 +629,7 @@ Place the map div INSIDE the contact section, after the address text."""
         response = await llm.complete(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
-            max_tokens=12000,
+            max_tokens=8192,  # qwen-max's hard ceiling — see _build()
         )
         return self._strip_code_fence(response.content)
 

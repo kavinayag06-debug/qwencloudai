@@ -122,9 +122,17 @@ class Lead(BaseModel):
     # largest content <img> tags). These are the only images the redesign should
     # ever use — they're actually of the business, unlike stock photography.
     source_image_urls: list[str] = Field(default_factory=list)
+    # Google Places photo references (real, owner/visitor-submitted photos of
+    # this specific business) — fallback real-photo source when the business's
+    # own website has none. Only populated by GoogleMapsConnector.
+    google_photo_refs: list[str] = Field(default_factory=list)
+    google_photo_attribution: str = ""
     # Filenames (relative to the lead's output "images/" folder) that were
     # successfully downloaded and are safe to reference in the generated HTML.
     local_image_paths: list[str] = Field(default_factory=list)
+    # filename -> required credit text, for images that came from Google Places
+    # (Google's ToS requires attributing owner/visitor-submitted photos).
+    image_attributions: dict[str, str] = Field(default_factory=dict)
     email_subject: str = ""
     email_body: str = ""
     zip_path: Optional[str] = None

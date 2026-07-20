@@ -214,10 +214,10 @@ Check specifically for:
     it look like a generic centered-hero-plus-three-cards AI template regardless of the colors used?
     Be specific about what differs (e.g. "reference uses an asymmetric hero with oversized type; this
     page uses a centered generic hero") (bad if it doesn't resemble the references)
-12. Broken images: any <img> with a src that would 404 (bad). If client photos were
-    provided as "images/..." paths, only those should be used. If picsum.photos URLs are used
-    as placeholders (because no client photos were available), that is acceptable — but broken
-    paths or fabricated URLs are still bad.
+12. Broken or placeholder images: any <img> pointing at a path/service other than the exact local
+    "images/..." filenames provided (e.g. picsum.photos, unsplash, any stock/placeholder service),
+    or an <img> at all when none were provided (bad — automatic fail). A page with zero photos is
+    always better than one with a fake/generic photo.
 13. Any base64-encoded image/SVG data (`data:image/...;base64,...`) anywhere in the HTML or CSS —
     always bad, wastes enormous space for a barely-visible effect and risks truncating the page
 

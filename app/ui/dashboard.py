@@ -196,6 +196,29 @@ async def download_zip(lead_id: str):
     )
 
 
+@router.get("/leads/{lead_id}/images/{filename}")
+async def serve_lead_image(lead_id: str, filename: str):
+    """Serve an image used by the generated site. The preview HTML references
+    these as relative 'images/<filename>' paths; since /leads/{lead_id}/preview
+    has no trailing slash, the browser resolves that against /leads/{lead_id}/,
+    so this route must live at that exact path for the <img> tags to resolve."""
+    db = get_database()
+    lead = db.get_lead(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    if not lead.html_path:
+        raise HTTPException(status_code=404, detail="Image not found")
+    images_dir = Path(lead.html_path).parent / "images"
+    for img_path in lead.local_image_paths:
+        if Path(img_path).name == filename:
+            candidate = images_dir / Path(img_path).name
+            if candidate.exists():
+                return FileResponse(path=candidate)
+
+    raise HTTPException(status_code=404, detail="Image not found")
+
+
 @router.get("/leads/{lead_id}/screenshot/{filename}")
 async def serve_screenshot(lead_id: str, filename: str):
     """Serve a screenshot image."""
