@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block header %}
+{% set page_title = "Settings" %}
+{% include "_page_header.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="settings-card">
+    <h2>Outreach automation</h2>
+
+    <div class="toggle-row">
+        <div class="toggle-row-text">
+            <strong>Auto-send for high confidence businesses</strong>
+            <p>
+                When on, leads scored <span class="tier-pill tier-high">High</span> confidence are
+                emailed automatically right after their redesign is generated &mdash; no manual
+                approval needed. Medium and low confidence leads always wait in
+                <a href="/">Need Intervention</a> for a human to review and send.
+            </p>
+        </div>
+
+        <form method="post" action="/settings/auto-send" class="toggle-form" id="auto-send-form">
+            <label class="switch">
+                <input
+                    type="checkbox"
+                    name="enabled"
+                    onchange="document.getElementById('auto-send-form').submit()"
+                    {% if auto_send_enabled %}checked{% endif %}
+                >
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
+        </form>
+    </div>
+
+    <p class="settings-status">
+        Currently: <strong>{{ "ON" if auto_send_enabled else "OFF" }}</strong>
+        {% if auto_send_enabled %}
+        &mdash; new high-confidence leads will be emailed without review.
+        {% else %}
+        &mdash; every lead, regardless of confidence, waits for you to click Send.
+        {% endif %}
+    </p>
+</div>
+{% endblock %}

@@ -14,6 +14,9 @@ from app.core.models import Lead, LeadStatus, WebsiteAnalysis, StyleTraits, Conf
 
 Base = declarative_base()
 
+# Key used in AppSettingRecord for the "auto-send high-confidence leads" toggle.
+AUTO_SEND_SETTING_KEY = "auto_send_high_confidence"
+
 
 class LeadRecord(Base):
     """SQLite table for leads."""
@@ -36,14 +39,22 @@ class LeadRecord(Base):
     html_path = Column(String, default=None)
     html_quality_score = Column(Integer, default=0)
     screenshot_paths_json = Column(Text, default="[]")
-    source_image_urls_json = Column(Text, default="[]")
-    local_image_paths_json = Column(Text, default="[]")
     email_subject = Column(String, default="")
     email_body = Column(Text, default="")
     zip_path = Column(String, default=None)
     logs_json = Column(Text, default="[]")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AppSettingRecord(Base):
+    """Generic key-value store for runtime-toggleable app settings
+    (e.g. auto-send for high confidence leads) that should persist across
+    restarts without needing to edit .env."""
+    __tablename__ = "app_settings"
+
+    key = Column(String, primary_key=True)
+    value = Column(String, default="")
 
 
 class Database:
@@ -55,31 +66,7 @@ class Database:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
         Base.metadata.create_all(self.engine)
-        self._migrate_missing_columns()
         self.SessionLocal = sessionmaker(bind=self.engine)
-
-    def _migrate_missing_columns(self) -> None:
-        """Add any columns that exist on LeadRecord but not yet in the sqlite
-        file on disk. SQLAlchemy's create_all() only creates missing *tables*,
-        never alters existing ones, so a schema change (like adding a new
-        field to Lead) would otherwise raise 'no such column' against any
-        database file created before this change. Simple additive columns are
-        safe to add this way in SQLite."""
-        with self.engine.connect() as conn:
-            existing = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(leads)").fetchall()}
-            for column in LeadRecord.__table__.columns:
-                if column.name not in existing:
-                    col_type = "TEXT"
-                    default = "NULL"
-                    if isinstance(column.type, Integer):
-                        col_type = "INTEGER"
-                        default = "0"
-                    elif column.name.endswith("_json"):
-                        default = "'[]'" if column.default is not None and column.default.arg not in (None,) else "NULL"
-                    conn.exec_driver_sql(
-                        f"ALTER TABLE leads ADD COLUMN {column.name} {col_type} DEFAULT {default}"
-                    )
-                    conn.commit()
 
     def get_session(self) -> Session:
         return self.SessionLocal()
@@ -112,8 +99,6 @@ class Database:
             record.email_body = lead.email_body
             record.zip_path = lead.zip_path
             record.screenshot_paths_json = json.dumps(lead.screenshot_paths)
-            record.source_image_urls_json = json.dumps(lead.source_image_urls)
-            record.local_image_paths_json = json.dumps(lead.local_image_paths)
             record.logs_json = json.dumps(lead.logs)
             record.updated_at = datetime.utcnow()
 
@@ -171,6 +156,37 @@ class Database:
         finally:
             session.close()
 
+    def get_setting(self, key: str, default: str = "") -> str:
+        """Get a persisted app setting (raw string). Returns default if unset."""
+        session = self.get_session()
+        try:
+            record = session.query(AppSettingRecord).filter_by(key=key).first()
+            return record.value if record else default
+        finally:
+            session.close()
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Persist an app setting (raw string)."""
+        session = self.get_session()
+        try:
+            record = session.query(AppSettingRecord).filter_by(key=key).first()
+            if record is None:
+                record = AppSettingRecord(key=key)
+                session.add(record)
+            record.value = value
+            session.commit()
+        finally:
+            session.close()
+
+    def get_bool_setting(self, key: str, default: bool = False) -> bool:
+        """Get a persisted boolean setting."""
+        raw = self.get_setting(key, "true" if default else "false")
+        return raw.lower() in ("true", "1", "yes", "on")
+
+    def set_bool_setting(self, key: str, value: bool) -> None:
+        """Persist a boolean setting."""
+        self.set_setting(key, "true" if value else "false")
+
     def _record_to_lead(self, record: LeadRecord) -> Lead:
         """Convert DB record to Lead model."""
         lead = Lead(
@@ -191,8 +207,6 @@ class Database:
             email_body=record.email_body,
             zip_path=record.zip_path,
             screenshot_paths=json.loads(record.screenshot_paths_json or "[]"),
-            source_image_urls=json.loads(record.source_image_urls_json or "[]"),
-            local_image_paths=json.loads(record.local_image_paths_json or "[]"),
             logs=json.loads(record.logs_json or "[]"),
             created_at=record.created_at,
             updated_at=record.updated_at,

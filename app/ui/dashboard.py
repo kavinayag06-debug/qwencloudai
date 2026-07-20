@@ -11,14 +11,14 @@ Provides:
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Request, Form, HTTPException
+from fastapi import APIRouter, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 
 from app.agents.pipeline import AgentPipeline
 from app.config import get_settings
-from app.core.models import LeadStatus, DiscoveryRequest
-from app.storage.database import get_database
+from app.core.models import Lead, LeadStatus, ConfidenceLevel, DiscoveryRequest
+from app.storage.database import get_database, AUTO_SEND_SETTING_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -27,32 +27,6 @@ templates_dir = Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=str(templates_dir))
 
 _pipeline = None
-
-# ponytail: single-process in-memory flag, not a job queue — good enough for a
-# local single-worker dashboard. Resets to False (silently) if the server
-# restarts mid-run; a real deployment would track this in the DB instead.
-_pipeline_status = {"running": False}
-
-
-async def _run_pipeline_in_background(pipeline: AgentPipeline, discovery_request: DiscoveryRequest) -> None:
-    _pipeline_status["running"] = True
-    try:
-        await pipeline.run_full_pipeline(discovery_request)
-    finally:
-        _pipeline_status["running"] = False
-
-
-# Same pattern as _pipeline_status, per-lead: which leads are currently being
-# processed via the single-lead "Process This Lead" button.
-_processing_lead_ids: set[str] = set()
-
-
-async def _process_single_lead_in_background(pipeline: AgentPipeline, lead_id: str) -> None:
-    _processing_lead_ids.add(lead_id)
-    try:
-        await pipeline.process_single_lead(lead_id)
-    finally:
-        _processing_lead_ids.discard(lead_id)
 
 
 def _get_pipeline() -> AgentPipeline:
@@ -64,18 +38,37 @@ def _get_pipeline() -> AgentPipeline:
 
 def _render(request: Request, template_name: str, context: dict) -> HTMLResponse:
     """Helper to render templates with consistent interface."""
+    # Always pass auto_send_enabled for the nav popup
+    db = get_database()
+    context.setdefault("auto_send_enabled", db.get_bool_setting(AUTO_SEND_SETTING_KEY, default=False))
     return templates.TemplateResponse(request, template_name, context)
 
 
 @router.get("/", response_class=HTMLResponse)
 async def dashboard_home(request: Request):
-    """Dashboard home - shows lead list."""
+    """Dashboard home - shows leads grouped by whether they need human review."""
     db = get_database()
     leads = db.get_all_leads()
+
+    need_intervention = []
+    no_intervention = []
+    for lead in leads:
+        if lead.confidence and lead.confidence.level == ConfidenceLevel.HIGH:
+            no_intervention.append(lead)
+        else:
+            need_intervention.append(lead)
+
+    # How many of the "no intervention" leads are actually still waiting to
+    # be sent (i.e. what "Send All" would act on).
+    sendable_high_confidence_count = sum(
+        1 for lead in no_intervention if lead.status == LeadStatus.PENDING_APPROVAL
+    )
+
     return _render(request, "index.html", {
-        "leads": leads,
-        "title": "QwenCloud AI - Redesign Agent",
-        "pipeline_running": _pipeline_status["running"],
+        "need_intervention": need_intervention,
+        "no_intervention": no_intervention,
+        "sendable_high_confidence_count": sendable_high_confidence_count,
+        "title": "Reb Design - Redesign Agent",
     })
 
 
@@ -90,21 +83,7 @@ async def lead_detail_page(request: Request, lead_id: str):
     return _render(request, "lead_detail.html", {
         "lead": lead,
         "title": f"{lead.company_name} - Detail",
-        "processing": lead_id in _processing_lead_ids,
     })
-
-
-@router.post("/leads/{lead_id}/process", response_class=HTMLResponse)
-async def process_lead_action(lead_id: str, background_tasks: BackgroundTasks):
-    """Run the full per-lead pipeline (analysis -> HTML -> screenshots -> email) for
-    just this one lead, in the background so the page doesn't hang."""
-    db = get_database()
-    if not db.get_lead(lead_id):
-        raise HTTPException(status_code=404, detail="Lead not found")
-
-    pipeline = _get_pipeline()
-    background_tasks.add_task(_process_single_lead_in_background, pipeline, lead_id)
-    return RedirectResponse(url=f"/leads/{lead_id}", status_code=303)
 
 
 @router.post("/leads/{lead_id}/approve", response_class=HTMLResponse)
@@ -142,14 +121,8 @@ async def reject_lead(lead_id: str):
 
 
 @router.post("/run-pipeline", response_class=HTMLResponse)
-async def run_pipeline_action(request: Request, background_tasks: BackgroundTasks):
-    """Kick off the full pipeline in the background and return immediately.
-
-    The pipeline can take many minutes (multiple leads, each several LLM
-    calls) — awaiting it here would leave the browser looking hung with no
-    feedback. Each lead's status is saved to the DB as it progresses, so the
-    dashboard already shows live progress on every refresh.
-    """
+async def run_pipeline_action(request: Request):
+    """Run the full pipeline from the dashboard with geolocation."""
     form = await request.form()
     lat = form.get("latitude")
     lng = form.get("longitude")
@@ -164,13 +137,13 @@ async def run_pipeline_action(request: Request, background_tasks: BackgroundTask
     )
 
     pipeline = _get_pipeline()
-    background_tasks.add_task(_run_pipeline_in_background, pipeline, discovery_request)
+    await pipeline.run_full_pipeline(discovery_request)
     return RedirectResponse(url="/", status_code=303)
 
 
 @router.post("/run-discovery", response_class=HTMLResponse)
 async def run_discovery_action(request: Request):
-    """Run discovery only with optional geolocation."""
+    """Run discovery only with geolocation."""
     form = await request.form()
     lat = form.get("latitude")
     lng = form.get("longitude")
@@ -191,7 +164,7 @@ async def run_discovery_action(request: Request):
 
 @router.get("/leads/{lead_id}/preview", response_class=HTMLResponse)
 async def preview_html(lead_id: str):
-    """Preview the generated HTML with image paths rewritten for web serving."""
+    """Preview the generated HTML."""
     db = get_database()
     lead = db.get_lead(lead_id)
     if not lead or not lead.html_path:
@@ -201,43 +174,7 @@ async def preview_html(lead_id: str):
     if not html_path.exists():
         raise HTTPException(status_code=404, detail="HTML file not found")
 
-    html_content = html_path.read_text(encoding="utf-8")
-
-    # Rewrite relative image paths (e.g. "images/photo_1.jpg") to our serving endpoint
-    html_content = html_content.replace(
-        'src="images/',
-        f'src="/leads/{lead_id}/images/'
-    )
-    html_content = html_content.replace(
-        "src='images/",
-        f"src='/leads/{lead_id}/images/"
-    )
-
-    return HTMLResponse(content=html_content)
-
-
-@router.get("/leads/{lead_id}/images/{filename}")
-async def serve_lead_image(lead_id: str, filename: str):
-    """Serve images from a lead's output/images folder."""
-    db = get_database()
-    lead = db.get_lead(lead_id)
-    if not lead or not lead.html_path:
-        raise HTTPException(status_code=404, detail="Lead not found")
-
-    # Images are stored in the same directory as the HTML, under images/
-    lead_dir = Path(lead.html_path).parent
-    image_path = lead_dir / "images" / filename
-
-    if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Image not found")
-
-    # Determine media type
-    suffix = image_path.suffix.lower()
-    media_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-                   ".webp": "image/webp", ".gif": "image/gif"}
-    media_type = media_types.get(suffix, "image/jpeg")
-
-    return FileResponse(path=str(image_path), media_type=media_type)
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
 
 
 @router.get("/leads/{lead_id}/download")
@@ -273,6 +210,63 @@ async def serve_screenshot(lead_id: str, filename: str):
                 return FileResponse(path=ss_path, media_type="image/png")
 
     raise HTTPException(status_code=404, detail="Screenshot not found")
+
+
+@router.post("/leads/send-all", response_class=HTMLResponse)
+async def send_all_high_confidence(request: Request):
+    """Send All - approve and send every high-confidence lead still pending approval."""
+    db = get_database()
+    leads = db.get_all_leads()
+    pipeline = _get_pipeline()
+
+    for lead in leads:
+        if (
+            lead.confidence
+            and lead.confidence.level == ConfidenceLevel.HIGH
+            and lead.status == LeadStatus.PENDING_APPROVAL
+        ):
+            lead.status = LeadStatus.APPROVED
+            lead.add_log("Approved via 'Send All' (high confidence)")
+            db.save_lead(lead)
+            await pipeline.email_service.approve_and_send(lead)
+
+    return RedirectResponse(url="/", status_code=303)
+
+
+@router.post("/leads/{lead_id}/regenerate", response_class=HTMLResponse)
+async def regenerate_lead(lead_id: str):
+    """Regenerate the redesign (analysis -> HTML -> screenshots -> email draft) for a lead."""
+    db = get_database()
+    lead = db.get_lead(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    lead.add_log("Regenerating redesign...")
+    db.save_lead(lead)
+
+    pipeline = _get_pipeline()
+    await pipeline.process_single_lead(lead_id)
+
+    return RedirectResponse(url="/", status_code=303)
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    """Settings page - currently: toggle auto-send for high-confidence leads."""
+    db = get_database()
+    auto_send_enabled = db.get_bool_setting(AUTO_SEND_SETTING_KEY, default=False)
+    return _render(request, "settings.html", {
+        "auto_send_enabled": auto_send_enabled,
+        "title": "Settings",
+    })
+
+
+@router.post("/settings/auto-send", response_class=HTMLResponse)
+async def update_auto_send_setting(enabled: bool = Form(False)):
+    """Toggle the auto-send-for-high-confidence setting (called via fetch from popup)."""
+    db = get_database()
+    db.set_bool_setting(AUTO_SEND_SETTING_KEY, enabled)
+    return HTMLResponse(content="ok", status_code=200)
 
 
 @router.get("/logs", response_class=HTMLResponse)

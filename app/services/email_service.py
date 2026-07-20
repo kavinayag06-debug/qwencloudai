@@ -2,9 +2,13 @@
 Email Service - drafts and sends outreach emails.
 
 Rules:
-- No email may be sent automatically until approved.
-- Drafts are created and held for human review.
-- Sending only happens after explicit approval.
+- By default, no email is sent automatically - drafts are created and held
+  for human review (pending_approval).
+- Exception: if the "auto-send high confidence" setting is enabled
+  (toggled on the Settings page), leads whose confidence level is HIGH are
+  automatically approved and sent right after drafting - no human click
+  required for that tier. Medium/low confidence leads always require a
+  human to approve them, regardless of this setting.
 """
 
 import logging
@@ -17,10 +21,10 @@ from pathlib import Path
 
 from app.config import get_settings
 from app.core.llm_provider import get_llm_provider, llm_unconfigured_reason
-from app.core.models import Lead, LeadStatus
+from app.core.models import Lead, LeadStatus, ConfidenceLevel
 from app.core.prompts import EMAIL_DRAFT_PROMPT
 from app.core.scoring import compute_confidence
-from app.storage.database import get_database
+from app.storage.database import get_database, AUTO_SEND_SETTING_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +37,9 @@ class EmailService:
         logger.info(f"Drafting email for {lead.company_name}")
         lead.add_log("Drafting outreach email")
 
+        # Check if LLM is actually configured
         unconfigured = llm_unconfigured_reason()
-        if unconfigured:
-            logger.warning(f"NOT an AI-drafted email for {lead.company_name} — {unconfigured}")
-            lead.add_log(f"AI not configured: using generic email template. Reason: {unconfigured}")
+        fallback_used = False
 
         design_problems = ", ".join(
             lead.website_analysis.design_problems[:5] if lead.website_analysis else ["outdated design"]
@@ -52,13 +55,15 @@ class EmailService:
 
         llm = get_llm_provider()
         try:
+            if unconfigured:
+                raise RuntimeError(unconfigured)
             response = await llm.complete(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 json_mode=True,
             )
             data = response.as_json()
-            # Handle case where model returns a list instead of dict
+            # Handle list responses from some models
             if isinstance(data, list) and len(data) > 0:
                 data = data[0] if isinstance(data[0], dict) else {}
             if not isinstance(data, dict):
@@ -66,10 +71,20 @@ class EmailService:
             lead.email_subject = data.get("subject", f"A fresh look for {lead.company_name}'s website")
             lead.email_body = data.get("body", self._fallback_email_body(lead))
         except Exception as e:
+            fallback_used = True
             logger.error(f"Email draft failed: {e}")
             lead.add_log(f"Email draft generation failed: {str(e)}")
             lead.email_subject = f"A fresh look for {lead.company_name}'s website"
             lead.email_body = self._fallback_email_body(lead)
+
+        # Loud warning when fallback is used
+        if fallback_used:
+            if unconfigured:
+                warn_msg = f"NOT an AI-drafted email — AI NOT CONFIGURED: {unconfigured}"
+            else:
+                warn_msg = "NOT an AI-drafted email — LLM call failed, using generic template"
+            logger.warning(warn_msg)
+            lead.add_log("AI not configured: NOT an AI-drafted email, using fallback template.")
 
         lead.status = LeadStatus.PENDING_APPROVAL
         lead.add_log("Email draft ready for approval")
@@ -86,6 +101,17 @@ class EmailService:
 
         db = get_database()
         db.save_lead(lead)
+
+        # Auto-send gate: only fires for HIGH confidence leads, and only if
+        # the human has explicitly turned this on via the Settings page.
+        # Medium/low confidence always stops at pending_approval for review.
+        auto_send_enabled = db.get_bool_setting(AUTO_SEND_SETTING_KEY, default=False)
+        if auto_send_enabled and lead.confidence and lead.confidence.level == ConfidenceLevel.HIGH:
+            lead.add_log("Auto-send enabled and confidence is HIGH - approving and sending automatically")
+            lead.status = LeadStatus.APPROVED
+            db.save_lead(lead)
+            lead = await self.approve_and_send(lead)
+
         return lead
 
     async def approve_and_send(self, lead: Lead) -> Lead:

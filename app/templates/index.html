@@ -1,103 +1,59 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="page-header">
-    <h1>Redesign Agent Dashboard</h1>
-    <div class="actions">
-        <form method="post" action="/run-discovery" style="display:inline;" id="form-discovery">
-            <input type="hidden" name="latitude" id="lat-discovery">
-            <input type="hidden" name="longitude" id="lng-discovery">
-            <button type="submit" class="btn btn-secondary">Run Discovery</button>
+<div class="board">
+    <section class="board-column board-column-warn">
+        <div class="board-column-header">
+            <div class="board-column-title-row">
+                <span class="status-dot status-dot-warn"></span>
+                <h2>Need Intervention</h2>
+                <span class="count-pill">{{ need_intervention | length }}</span>
+            </div>
+            <p class="board-column-subtitle">Low / Medium confidence &mdash; review before sending</p>
+        </div>
+
+        <div class="lead-card-list">
+            {% for lead in need_intervention %}
+                {% include "_lead_card.html" %}
+            {% else %}
+            <div class="empty-column">Nothing here right now.</div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="board-column board-column-ok">
+        <div class="board-column-header">
+            <div class="board-column-title-row">
+                <span class="status-dot status-dot-ok"></span>
+                <h2>Don't Need Intervention</h2>
+                <span class="count-pill">{{ no_intervention | length }}</span>
+            </div>
+            <p class="board-column-subtitle">High confidence &mdash; ready to auto-send</p>
+        </div>
+
+        {% if sendable_high_confidence_count > 0 %}
+        <form method="post" action="/leads/send-all">
+            <button type="submit" class="btn-send-all">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Send All ({{ sendable_high_confidence_count }})
+            </button>
         </form>
-        <form method="post" action="/run-pipeline" style="display:inline;" id="form-pipeline">
-            <input type="hidden" name="latitude" id="lat-pipeline">
-            <input type="hidden" name="longitude" id="lng-pipeline">
-            <button type="submit" class="btn btn-primary">Run Full Pipeline</button>
-        </form>
-    </div>
+        {% endif %}
+
+        <div class="lead-card-list">
+            {% for lead in no_intervention %}
+                {% include "_lead_card.html" %}
+            {% else %}
+            <div class="empty-column">Nothing here right now.</div>
+            {% endfor %}
+        </div>
+    </section>
 </div>
-<p class="geo-status" id="geo-status" style="font-size:0.8rem;color:#64748b;margin-bottom:1rem;"></p>
 
-{% if pipeline_running %}
-<div class="pipeline-banner" style="background:#fef3c7;color:#92400e;padding:0.75rem 1rem;border-radius:6px;margin-bottom:1rem;">
-    Pipeline running in the background — this page refreshes automatically every 5s.
-    Lead statuses below update as each stage completes.
-</div>
-<script>setTimeout(function() { location.reload(); }, 5000);</script>
-{% endif %}
-
-<script>
-(function() {
-    if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(function(pos) {
-            var lat = pos.coords.latitude;
-            var lng = pos.coords.longitude;
-            document.getElementById('lat-discovery').value = lat;
-            document.getElementById('lng-discovery').value = lng;
-            document.getElementById('lat-pipeline').value = lat;
-            document.getElementById('lng-pipeline').value = lng;
-            document.getElementById('geo-status').textContent = 'Location: ' + lat.toFixed(4) + ', ' + lng.toFixed(4);
-        }, function(err) {
-            document.getElementById('geo-status').textContent = 'Location unavailable — using Singapore default';
-        });
-    } else {
-        document.getElementById('geo-status').textContent = 'Geolocation not supported — using Singapore default';
-    }
-})();
-</script>
-
-{% if leads %}
-<table class="leads-table">
-    <thead>
-        <tr>
-            <th>Company</th>
-            <th>Industry</th>
-            <th>Location</th>
-            <th>Status</th>
-            <th>Confidence</th>
-            <th>Score</th>
-            <th>Actions</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for lead in leads %}
-        <tr class="status-{{ lead.status.value }}">
-            <td>
-                <a href="/leads/{{ lead.id }}">{{ lead.company_name }}</a>
-                {% if lead.website_url %}
-                <br><small class="url">{{ lead.website_url[:40] }}...</small>
-                {% endif %}
-            </td>
-            <td>{{ lead.industry }}</td>
-            <td>{{ lead.location }}</td>
-            <td><span class="badge badge-{{ lead.status.value }}">{{ lead.status.value }}</span></td>
-            <td>
-                {% if lead.confidence %}
-                <span class="confidence confidence-{{ lead.confidence.level.value }}">
-                    {{ lead.confidence.level.value }}
-                </span>
-                {% else %}
-                <span class="confidence">-</span>
-                {% endif %}
-            </td>
-            <td>{{ lead.confidence.overall if lead.confidence else '-' }}</td>
-            <td>
-                <a href="/leads/{{ lead.id }}" class="btn btn-small">View</a>
-                {% if lead.html_path %}
-                <a href="/leads/{{ lead.id }}/preview" class="btn btn-small" target="_blank">Preview</a>
-                {% endif %}
-                {% if lead.zip_path %}
-                <a href="/leads/{{ lead.id }}/download" class="btn btn-small">Download</a>
-                {% endif %}
-            </td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-{% else %}
+{% if not need_intervention and not no_intervention %}
 <div class="empty-state">
     <h2>No leads yet</h2>
-    <p>Click "Run Full Pipeline" to discover businesses and generate redesign proposals.</p>
+    <p>Click "Run Full Pipeline" above to discover businesses and generate redesign proposals.</p>
 </div>
 {% endif %}
 {% endblock %}

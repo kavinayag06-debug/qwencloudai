@@ -325,51 +325,58 @@ class HTMLGenerator:
     async def _prepare_images(self, lead: Lead, lead_dir: Path) -> list[str]:
         """Download real photos from the client's current site into images/.
 
-        Returns the filenames (relative to lead_dir) that were actually saved
-        successfully. Only these filenames are ever handed to the model — if
-        the list is empty, the prompt instructs a photo-free, CSS-only design
-        instead of a broken <img> or an unrelated stock photo.
+        If client images can't be downloaded, falls back to industry-mapped
+        stock images from data/stock_images/. Returns filenames (relative to
+        lead_dir/images/) that were saved successfully.
         """
-        if not lead.source_image_urls:
-            return []
-
         images_dir = lead_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
         saved: list[str] = []
 
-        async with httpx.AsyncClient(
-            timeout=15.0, follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-        ) as client:
-            for i, url in enumerate(lead.source_image_urls[:MAX_SOURCE_IMAGES]):
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code != 200:
+        # Step 1: Try to download real photos from the client's website
+        if lead.source_image_urls:
+            async with httpx.AsyncClient(
+                timeout=15.0, follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            ) as client:
+                for i, url in enumerate(lead.source_image_urls[:MAX_SOURCE_IMAGES]):
+                    try:
+                        resp = await client.get(url)
+                        if resp.status_code != 200:
+                            continue
+                        content_type = resp.headers.get("content-type", "")
+                        if not content_type.startswith("image/"):
+                            continue
+                        if "svg" in content_type:
+                            continue
+                        if len(resp.content) < 5000:
+                            continue
+                        if len(resp.content) > 10_000_000:
+                            continue
+                        ext = content_type.split("/")[-1].split(";")[0].strip() or "jpg"
+                        if ext == "jpeg":
+                            ext = "jpg"
+                        if ext not in ("jpg", "png", "webp"):
+                            ext = "jpg"
+                        filename = f"photo_{i + 1}.{ext}"
+                        (images_dir / filename).write_bytes(resp.content)
+                        saved.append(filename)
+                    except Exception as e:
+                        logger.warning(f"Could not download image {url}: {e}")
                         continue
-                    content_type = resp.headers.get("content-type", "")
-                    if not content_type.startswith("image/"):
-                        continue
-                    if len(resp.content) < 2048:  # almost certainly an icon/pixel, not a photo
-                        continue
-                    ext = content_type.split("/")[-1].split(";")[0].strip() or "jpg"
-                    if ext == "jpeg":
-                        ext = "jpg"
-                    elif ext == "svg+xml":
-                        ext = "svg"
-                    if ext not in ("jpg", "png", "webp", "gif", "svg"):
-                        ext = "jpg"
-                    filename = f"photo_{i + 1}.{ext}"
-                    (images_dir / filename).write_bytes(resp.content)
-                    saved.append(filename)
-                except Exception as e:
-                    logger.warning(f"Could not download image {url}: {e}")
-                    continue
+
+        # Step 2: If no client images worked, use industry-mapped stock images
+        if not saved:
+            from app.services.stock_images import get_stock_images_for_industry
+            saved = await get_stock_images_for_industry(lead.industry, lead_dir, max_images=3)
+            if saved:
+                lead.add_log(f"Using {len(saved)} stock images (client images unavailable)")
+            else:
+                lead.add_log("No images available (client or stock)")
+        else:
+            lead.add_log(f"Downloaded {len(saved)} real photos from the client's site")
 
         lead.local_image_paths = saved
-        if saved:
-            lead.add_log(f"Downloaded {len(saved)} real photos from the client's site")
-        else:
-            lead.add_log("No usable photos found on the client's site; using a photo-free design")
         return saved
 
     async def _plan(self, llm, lead: Lead, style_traits: StyleTraits) -> dict:
@@ -415,17 +422,17 @@ class HTMLGenerator:
 
         if local_images:
             image_instructions = (
-                f"Real photos of this business are available at these EXACT local paths — "
-                f"use only these, each at most once, and no others: "
+                f"Photos are available at these EXACT local paths. "
+                f"Use them as src attributes in <img> tags (each image at most once): "
                 + ", ".join(f'"images/{name}"' for name in local_images)
+                + "\nSet appropriate alt text for each image."
             )
         else:
             image_instructions = (
-                "No real photos of this business are available. Do NOT use <img> tags, "
-                "picsum.photos, unsplash, or any other placeholder/stock image service. "
-                "Build the visual interest entirely from CSS: gradients, color blocks, "
-                "geometric shapes, subtle patterns, and typography, the way the attached "
-                "reference designs do in their non-photo sections."
+                "Use picsum.photos for placeholder images. "
+                "Example: src=\"https://picsum.photos/seed/hero/800/500\" for hero, "
+                "src=\"https://picsum.photos/seed/service1/400/300\" for cards. "
+                "Use a different seed word for each image. Always include alt text."
             )
 
         prompt = HTML_GENERATION_PROMPT.format(
@@ -497,13 +504,12 @@ Place the map div INSIDE the contact section, after the address text."""
             })
             content_parts.extend(build_image_content_parts(reference_images))
 
-        # 8192 is qwen-max's hard max_tokens ceiling (DashScope returns 400
-        # InvalidParameter above it) — don't raise this without checking the
-        # configured model's actual limit first.
+        # qwen3.7-max supports up to 16384 output tokens. Use 12000 to give room
+        # for a full HTML page without truncation.
         response = await vision.complete(
             messages=[{"role": "user", "content": content_parts}],
             temperature=0.7,
-            max_tokens=8192,
+            max_tokens=12000,
         )
         return self._strip_code_fence(response.content)
 
@@ -544,7 +550,7 @@ Place the map div INSIDE the contact section, after the address text."""
         response = await llm.complete(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
-            max_tokens=8192,
+            max_tokens=12000,
         )
         return self._strip_code_fence(response.content)
 
@@ -560,12 +566,13 @@ Place the map div INSIDE the contact section, after the address text."""
 
     @staticmethod
     def _looks_like_html(content: str) -> bool:
-        """True only for a genuinely complete document — a response that starts
-        correctly but got cut off mid-CSS/mid-markup (hitting max_tokens) must not
-        be accepted as "valid HTML" just because it starts with <!DOCTYPE>."""
+        """True if the content looks like a valid HTML document.
+        Accepts minor variations: trailing whitespace, comments after </html>, etc."""
         lowered = content.strip().lower()
         starts_ok = lowered.startswith("<!doctype") or lowered.startswith("<html")
-        return starts_ok and lowered.rstrip().endswith("</html>")
+        # Check that </html> appears somewhere near the end (last 100 chars)
+        ends_ok = "</html>" in lowered[-100:]
+        return starts_ok and ends_ok
 
     def _generate_fallback_html(self, lead: Lead, style_traits: StyleTraits) -> str:
         """Generate industry-specific fallback HTML with varied layouts."""

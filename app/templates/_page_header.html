@@ -1,0 +1,13 @@
+{# Expects `page_title` to be set via {% set page_title = "..." %} before including this. #}
+<div class="topbar-brand">
+    <span class="brand-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L14 9L21 11L14 13L12 20L10 13L3 11L10 9L12 2Z" fill="currentColor"/>
+        </svg>
+    </span>
+    <span class="topbar-page-title">{{ page_title }}</span>
+</div>
+<a href="/" class="back-link">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M19 12H5M11 18L5 12L11 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Back to Dashboard
+</a>

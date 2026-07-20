@@ -158,7 +158,8 @@ class SiteAnalyzer:
         hero photo), then large <img> tags, skipping obvious icons, logos,
         tracking pixels, and data: URIs (which we can't safely re-host).
         """
-        skip_hints = ("logo", "icon", "sprite", "pixel", "avatar", "badge", "spinner")
+        skip_hints = ("logo", "icon", "sprite", "pixel", "avatar", "badge", "spinner",
+                      "placeholder", "loading", "blank", "transparent", "favicon", "svg")
         urls: list[str] = []
         seen = set()
 
@@ -171,6 +172,9 @@ class SiteAnalyzer:
                 return
             lowered = resolved.lower()
             if any(hint in lowered for hint in skip_hints):
+                return
+            # Skip SVG files (usually logos/icons, not photos)
+            if lowered.endswith(".svg"):
                 return
             if resolved not in seen:
                 seen.add(resolved)

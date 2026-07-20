@@ -1,32 +1,57 @@
 {% extends "base.html" %}
 
+{% block header %}
+{% set page_title = "System Logs" %}
+{% include "_page_header.html" %}
+{% endblock %}
+
 {% block content %}
-<div class="page-header">
-    <h1>System Logs</h1>
+<div class="logs-card">
+    <div class="logs-card-header">
+        <h2>Recent Events</h2>
+        <div class="search-box">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <input type="text" id="log-search" placeholder="Search logs..." autocomplete="off">
+        </div>
+    </div>
+
+    {% if logs %}
+    <table class="leads-table" id="logs-table">
+        <thead>
+            <tr>
+                <th>Company</th>
+                <th>Status</th>
+                <th>Latest Activity</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in logs %}
+            <tr>
+                <td><a href="/leads/{{ entry.id }}">{{ entry.company }}</a></td>
+                <td><span class="badge badge-{{ entry.status }}">{{ entry.status | replace('_', ' ') | upper }}</span></td>
+                <td><code>{{ entry.latest_log }}</code></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No logs yet. Run the pipeline to generate activity.</p>
+    </div>
+    {% endif %}
 </div>
 
-{% if logs %}
-<table class="leads-table">
-    <thead>
-        <tr>
-            <th>Company</th>
-            <th>Status</th>
-            <th>Latest Activity</th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for entry in logs %}
-        <tr>
-            <td><a href="/leads/{{ entry.id }}">{{ entry.company }}</a></td>
-            <td><span class="badge badge-{{ entry.status }}">{{ entry.status }}</span></td>
-            <td><code>{{ entry.latest_log }}</code></td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-{% else %}
-<div class="empty-state">
-    <p>No logs yet. Run the pipeline to generate activity.</p>
-</div>
-{% endif %}
+<script>
+    // Simple client-side filter - no framework needed, just plain JS.
+    const searchInput = document.getElementById('log-search');
+    const table = document.getElementById('logs-table');
+    if (searchInput && table) {
+        searchInput.addEventListener('input', () => {
+            const query = searchInput.value.trim().toLowerCase();
+            table.querySelectorAll('tbody tr').forEach((row) => {
+                row.style.display = row.textContent.toLowerCase().includes(query) ? '' : 'none';
+            });
+        });
+    }
+</script>
 {% endblock %}

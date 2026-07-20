@@ -7,20 +7,87 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <nav class="navbar">
-        <div class="nav-brand">
-            <a href="/">QwenCloud AI</a>
+    <header class="topbar">
+        {% block header %}
+        <div class="topbar-brand">
+            <span class="brand-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L14 9L21 11L14 13L12 20L10 13L3 11L10 9L12 2Z" fill="currentColor"/>
+                </svg>
+            </span>
+            <a href="/">Reb Design</a>
         </div>
-        <div class="nav-links">
-            <a href="/">Dashboard</a>
-            <a href="/logs">Logs</a>
-        </div>
-    </nav>
+        <nav class="topbar-nav">
+            <form method="post" action="/run-discovery" class="nav-form">
+                <input type="hidden" name="latitude" class="geo-lat">
+                <input type="hidden" name="longitude" class="geo-lng">
+                <button type="submit" class="nav-action">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 4L19 12L6 20V4Z" fill="currentColor"/></svg>
+                    Run Discovery
+                </button>
+            </form>
+            <form method="post" action="/run-pipeline" class="nav-form">
+                <input type="hidden" name="latitude" class="geo-lat">
+                <input type="hidden" name="longitude" class="geo-lng">
+                <button type="submit" class="nav-action">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M13 2L4 14H11L10 22L20 9H13L13 2Z" fill="currentColor"/></svg>
+                    Run Full Pipeline
+                </button>
+            </form>
+            <a href="/logs" class="nav-action">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 12H19M13 6L19 12L13 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                System Logs
+            </a>
+            <div class="settings-popup-wrapper">
+                <button type="button" class="nav-action" id="settings-toggle">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="1.5"/></svg>
+                    Settings
+                </button>
+                <div class="settings-popup" id="settings-popup">
+                    <label class="toggle-row">
+                        <span>Auto-send</span>
+                        <input type="checkbox" id="auto-send-check" {% if auto_send_enabled %}checked{% endif %} onchange="toggleAutoSend(this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+        </nav>
+        {% endblock %}
+    </header>
     <main class="container">
         {% block content %}{% endblock %}
     </main>
     <footer class="footer">
-        <p>QwenCloud AI Redesign Agent &mdash; Provider: {{ config_provider if config_provider else "mock" }}</p>
+        <p>Reb Design &mdash; Provider: {{ config_provider if config_provider else "mock" }}</p>
     </footer>
+    <script>
+    // Geolocation — populate all lat/lng hidden fields
+    (function() {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(function(pos) {
+                document.querySelectorAll('.geo-lat').forEach(function(el) { el.value = pos.coords.latitude; });
+                document.querySelectorAll('.geo-lng').forEach(function(el) { el.value = pos.coords.longitude; });
+            });
+        }
+    })();
+    // Settings popup
+    document.getElementById('settings-toggle').addEventListener('click', function(e) {
+        e.stopPropagation();
+        document.getElementById('settings-popup').classList.toggle('open');
+    });
+    document.addEventListener('click', function(e) {
+        var popup = document.getElementById('settings-popup');
+        if (!e.target.closest('.settings-popup-wrapper')) {
+            popup.classList.remove('open');
+        }
+    });
+    function toggleAutoSend(enabled) {
+        var form = new FormData();
+        form.append('enabled', enabled ? 'true' : '');
+        fetch('/settings/auto-send', { method: 'POST', body: new URLSearchParams(form) })
+            .then(function() {})
+            .catch(function() { document.getElementById('auto-send-check').checked = !enabled; });
+    }
+    </script>
 </body>
 </html>

@@ -1,0 +1,62 @@
+{# Expects `lead` to be set (loop variable from index.html). #}
+<div class="lead-card">
+    <div class="lead-card-top">
+        <div>
+            <a href="/leads/{{ lead.id }}" class="lead-card-name">{{ lead.company_name }}</a>
+            {% if lead.website_url %}
+            <a href="{{ lead.website_url }}" target="_blank" class="lead-card-url">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18 13V19A2 2 0 0116 21H5A2 2 0 013 19V8A2 2 0 015 6H11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 3H21V9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 14L21 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                {{ lead.website_url }}
+            </a>
+            {% endif %}
+        </div>
+        <div class="lead-card-score">
+            <span class="tier-pill tier-{{ lead.confidence.level.value if lead.confidence else 'low' }}">
+                {{ (lead.confidence.level.value if lead.confidence else 'low') | capitalize }}
+            </span>
+            <span class="score-number">{{ lead.confidence.overall if lead.confidence else '\u2013' }}<small>SCORE</small></span>
+        </div>
+    </div>
+
+    <p class="lead-card-meta">{{ lead.industry }} &middot; {{ lead.location }}</p>
+
+    {% if "NOT an AI-generated design" in (lead.logs | join(" ")) %}
+    <p class="fallback-notice">⚠ Fallback template used — AI generation was unavailable</p>
+    {% endif %}
+
+    <div class="lead-card-actions">
+        {% if lead.html_path %}
+        <a href="/leads/{{ lead.id }}/preview" target="_blank" class="link-action">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M18 13V19A2 2 0 0116 21H5A2 2 0 013 19V8A2 2 0 015 6H11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 3H21V9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 14L21 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            View Generated Website
+        </a>
+        {% endif %}
+        {% if lead.zip_path %}
+        <a href="/leads/{{ lead.id }}/download" class="link-action">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3V15M12 15L7 10M12 15L17 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17V19A2 2 0 006 21H18A2 2 0 0020 19V17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download
+        </a>
+        {% endif %}
+        <form method="post" action="/leads/{{ lead.id }}/regenerate" class="inline-form">
+            <button type="submit" class="link-action link-action-btn">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 4V9H4.58M20 20V15H19.42M4.58 9A8 8 0 0119.42 15M4.58 9H9M19.42 15H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Regenerate
+            </button>
+        </form>
+
+        <span class="spacer"></span>
+
+        {% if lead.status.value == 'sent' %}
+        <span class="sent-tag">&#10003; Sent</span>
+        {% elif lead.status.value == 'pending_approval' %}
+        <form method="post" action="/leads/{{ lead.id }}/approve" class="inline-form">
+            <button type="submit" class="btn-send">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M22 2L11 13M22 2L15 22L11 13M22 2L2 9L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Send
+            </button>
+        </form>
+        {% else %}
+        <span class="status-fallback">{{ lead.status.value | replace('_', ' ') | capitalize }}</span>
+        {% endif %}
+    </div>
+</div>

@@ -132,8 +132,13 @@ class DiscoveryService:
 
         logger.info(f"After excluding existing: {len(new_results)} new businesses (from {len(unique_results)} unique)")
 
+        # Filter out chain stores / multi-location brands
+        # We want single-location brick-and-mortar businesses, not franchises
+        independent_results = self._filter_chains(new_results, all_results)
+        logger.info(f"After chain filter: {len(independent_results)} independent businesses")
+
         # Filter: must have a website URL
-        with_website = [r for r in new_results if r.website_url]
+        with_website = [r for r in independent_results if r.website_url]
 
         if not with_website:
             logger.warning("No new businesses with websites found. Try different categories.")
@@ -189,3 +194,81 @@ class DiscoveryService:
             return math.sqrt(dlat**2 + dlng**2)
 
         return sorted(results, key=distance)
+
+    # Well-known chain store brands to filter out
+    KNOWN_CHAINS = {
+        "starbucks", "mcdonald", "mcdonalds", "burger king", "subway", "kfc",
+        "pizza hut", "dominos", "domino's", "dunkin", "dunkin'", "tim hortons",
+        "safra", "ntuc", "fairprice", "cold storage", "guardian", "watsons",
+        "7-eleven", "cheers", "popular", "courts", "harvey norman",
+        "breadtalk", "toast box", "ya kun", "old chang kee", "mr bean",
+        "the coffee bean", "coffee bean", "gong cha", "koi", "liho",
+        "paris baguette", "tous les jours", "four leaves",
+        "jean yip", "ec house", "action cut", "qb house",
+        "gold's gym", "anytime fitness", "fitness first", "virgin active",
+        "guardian pharmacy", "unity pharmacy", "caring pharmacy",
+        "miniso", "daiso", "don don donki", "donki",
+        "uniqlo", "h&m", "zara", "cotton on", "charles & keith",
+        "sephora", "innisfree", "the face shop",
+        "comfort delgro", "grab",
+    }
+
+    def _filter_chains(
+        self, results: list[DiscoveryResult], all_results: list[DiscoveryResult]
+    ) -> list[DiscoveryResult]:
+        """Filter out chain stores and multi-location businesses.
+
+        Signals used:
+        1. Name matches a known chain brand
+        2. Name appears at multiple different addresses in the full result set
+           (indicates a franchise with multiple outlets)
+        3. Name contains branch indicators like '@', '#', 'outlet', 'branch'
+           combined with a base name that appears multiple times
+        """
+        # Count how many distinct addresses each base name has
+        from collections import Counter
+        name_addresses: dict[str, set] = {}
+        for r in all_results:
+            base = self._extract_base_name(r.company_name)
+            if base not in name_addresses:
+                name_addresses[base] = set()
+            if r.address:
+                name_addresses[base].add(r.address.lower().strip())
+
+        filtered = []
+        for r in results:
+            name_lower = r.company_name.lower().strip()
+            base = self._extract_base_name(r.company_name)
+
+            # Check against known chains
+            if any(chain in name_lower for chain in self.KNOWN_CHAINS):
+                logger.debug(f"Filtered chain (known brand): {r.company_name}")
+                continue
+
+            # Check if this base name appears at 3+ different addresses (chain store)
+            if base in name_addresses and len(name_addresses[base]) > 2:
+                logger.debug(f"Filtered chain (3+ locations): {r.company_name}")
+                continue
+
+            filtered.append(r)
+
+        return filtered
+
+    @staticmethod
+    def _extract_base_name(name: str) -> str:
+        """Extract the base business name, stripping branch/location suffixes.
+
+        'Bake House @ Jurong' -> 'bake house'
+        'FairPrice #123' -> 'fairprice'
+        'Starbucks (Orchard)' -> 'starbucks'
+        """
+        import re
+        name = name.lower().strip()
+        # Remove everything after @ (branch indicator)
+        name = re.split(r'\s*[@#]\s*', name)[0]
+        # Remove parenthetical location info
+        name = re.sub(r'\s*\(.*?\)\s*', '', name)
+        # Remove common suffixes
+        for suffix in (" outlet", " branch", " store", " pte ltd", " pte. ltd.", " ptd ltd"):
+            name = name.replace(suffix, "")
+        return name.strip()
