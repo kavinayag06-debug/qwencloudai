@@ -407,7 +407,7 @@ class HTMLGenerator:
         if saved:
             lead.add_log(f"Downloaded {len(saved)} real photos from the client's site")
 
-        # Step 2: If the site had nothing, fall back to this business's real
+        # If the site had nothing, fall back to this business's real
         # Google Places photos (still real, still specific to this business —
         # never a generic/stock substitute).
         settings = get_settings()

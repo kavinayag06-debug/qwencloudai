@@ -119,8 +119,8 @@ class Lead(BaseModel):
     html_quality_score: int = Field(default=0, ge=0, le=100)
     screenshot_paths: list[str] = Field(default_factory=list)
     # Real photo URLs scraped from the business's own current website (og:image,
-    # largest content <img> tags). These are the only images the redesign should
-    # ever use — they're actually of the business, unlike stock photography.
+    # largest content <img> tags). These are preferred over the business's
+    # Google Places photos; generic stock photography is never used.
     source_image_urls: list[str] = Field(default_factory=list)
     # Google Places photo references (real, owner/visitor-submitted photos of
     # this specific business) — fallback real-photo source when the business's

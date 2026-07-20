@@ -4,10 +4,10 @@ An AI-powered automation agent that discovers small brick-and-mortar businesses 
 
 ## Features
 
-- **Discovery Pipeline** — Finds local businesses with poor web presence using Exa, Google Maps, and web directory search
+- **Discovery Pipeline** — Finds local businesses with poor web presence using Exa, Google Maps, and web directory search while excluding non-commercial institutions
 - **Website Analysis** — Evaluates modernity, responsiveness, CTAs, trust signals, mobile-friendliness
 - **Design Reference Analysis** — Scans your past design screenshots to extract style signals
-- **HTML Generation** — Creates complete, responsive landing pages tailored to each business
+- **HTML Generation** — Creates complete, responsive landing pages using real photos of the business when available, otherwise a photo-free design
 - **Screenshot Rendering** — Uses Playwright to capture desktop/tablet/mobile screenshots of generated HTML
 - **Email Drafting** — Generates professional outreach emails with approval gating
 - **Confidence Scoring** — Transparent scoring with routing rules (high/medium/low)
@@ -84,6 +84,7 @@ qwencloudai/
 │   │   └── prompts.py       # Provider-agnostic prompt templates
 │   ├── connectors/
 │   │   ├── base.py          # Connector interface
+│   │   ├── institution_filter.py # Non-commercial institution filtering
 │   │   ├── mock_connector.py
 │   │   ├── exa_connector.py
 │   │   ├── google_maps_connector.py
@@ -113,6 +114,9 @@ qwencloudai/
 │   ├── test_file_handling.py
 │   ├── test_confidence_recompute.py
 │   ├── test_design_analyzer.py
+│   ├── test_base_template_js_guard.py
+│   ├── test_institution_filter.py
+│   ├── test_lead_images_route.py
 │   └── test_email_service.py
 ├── data/
 │   ├── design_screenshots/   # Your past design references
