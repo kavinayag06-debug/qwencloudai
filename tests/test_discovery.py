@@ -310,3 +310,62 @@ async def test_web_directory_connector_excludes_institutions(monkeypatch):
     names = {r.company_name for r in results}
     assert "Ang Mo Kio Primary School" not in names
     assert "Bright Minds Tuition Centre" in names
+
+
+@pytest.mark.asyncio
+async def test_web_directory_excludes_decoded_duckduckgo_institution_url(monkeypatch):
+    import httpx
+    from app.connectors.web_directory_connector import WebDirectoryConnector
+
+    html = """
+    <html><body>
+    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fcourses.example.edu.sg%2Fadmissions">
+      Course Information
+    </a>
+    </body></html>
+    """
+
+    class FakeResponse:
+        status_code = 200
+        text = html
+
+    async def fake_post(self, url, data=None):
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    results = await WebDirectoryConnector().discover(
+        location="Singapore", categories=["tuition"], max_results=10
+    )
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_web_directory_retains_decoded_duckduckgo_commercial_url(monkeypatch):
+    import httpx
+    from app.connectors.web_directory_connector import WebDirectoryConnector
+
+    html = """
+    <html><body>
+    <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fbrightminds.sg%2Ftuition">
+      Bright Minds Tuition Centre
+    </a>
+    </body></html>
+    """
+
+    class FakeResponse:
+        status_code = 200
+        text = html
+
+    async def fake_post(self, url, data=None):
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    results = await WebDirectoryConnector().discover(
+        location="Singapore", categories=["tuition"], max_results=10
+    )
+
+    assert len(results) == 1
+    assert results[0].website_url == "https://brightminds.sg/tuition"

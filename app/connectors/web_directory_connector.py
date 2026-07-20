@@ -2,6 +2,7 @@
 
 import logging
 from typing import Optional
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -10,6 +11,21 @@ from app.connectors.base import BaseConnector, DiscoveryResult
 from app.connectors.institution_filter import is_institution_name_or_domain
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_result_url(href: str) -> str:
+    if href.startswith("//"):
+        resolved = f"https:{href}"
+    else:
+        resolved = urljoin("https://duckduckgo.com", href)
+
+    parsed = urlsplit(resolved)
+    hostname = (parsed.hostname or "").lower()
+    if hostname == "duckduckgo.com" or hostname.endswith(".duckduckgo.com"):
+        targets = parse_qs(parsed.query).get("uddg", [])
+        if targets:
+            return targets[0]
+    return resolved
 
 
 class WebDirectoryConnector(BaseConnector):
@@ -57,14 +73,15 @@ class WebDirectoryConnector(BaseConnector):
                     for link in links[:3]:
                         href = link.get("href", "")
                         title = link.get_text(strip=True)
-                        if not href or not title or "ad" in href.lower():
+                        if not href or not title or link.find_parent(class_="result--ad"):
                             continue
-                        if is_institution_name_or_domain(title, href):
+                        target_url = _resolve_result_url(href)
+                        if is_institution_name_or_domain(title, target_url):
                             logger.debug(f"Filtered likely non-commercial institution: {title}")
                             continue
                         results.append(DiscoveryResult(
                             company_name=title,
-                            website_url=href,
+                            website_url=target_url,
                             industry=category,
                             location=location,
                             source="web_directory",
