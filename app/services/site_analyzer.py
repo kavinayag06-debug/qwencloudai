@@ -36,13 +36,18 @@ class SiteAnalyzer:
         logger.info(f"Analyzing website for {lead.company_name}: {lead.website_url}")
         lead.add_log(f"Starting website analysis: {lead.website_url}")
 
-        # Fetch page content + real photos from the business's own site. These
-        # photos (not stock/placeholder images) are what the redesign will use,
-        # so the client's landing page always shows real, relevant imagery.
+        # Fetch page content + preferred real photos from the business's own
+        # site. If none are usable, generation may use that business's Google
+        # Places photos or produce a photo-free design, never stock imagery.
+        is_placeholder_url = not lead.website_url or lead.website_url.startswith("https://example.com")
         page_content, image_urls = await self._fetch_page(lead.website_url)
         lead.source_image_urls = image_urls
         if image_urls:
             lead.add_log(f"Found {len(image_urls)} candidate photos on the original site")
+        elif is_placeholder_url:
+            lead.add_log("Source URL is a placeholder/test URL — no real site to extract photos from")
+        else:
+            lead.add_log("No usable candidate photos found on the original site")
 
         if not page_content:
             lead.add_log("Warning: Could not fetch website content, using description")

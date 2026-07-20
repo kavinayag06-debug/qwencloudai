@@ -8,6 +8,7 @@ import httpx
 
 from app.config import get_settings
 from app.connectors.base import BaseConnector, DiscoveryResult
+from app.connectors.institution_filter import is_institution_place_type
 
 logger = logging.getLogger(__name__)
 
@@ -91,12 +92,25 @@ class GoogleMapsConnector(BaseConnector):
                         place_lat = loc.get("latitude")
                         place_lng = loc.get("longitude")
 
+                        # Check the authoritative place type BEFORE any category
+                        # relabeling. Some categories we search for (e.g. "tuition")
+                        # have no dedicated Google type and share a type with a
+                        # non-commercial institution (e.g. "school") — reject those
+                        # here, while the type is still Google's own classification,
+                        # rather than after they've been relabeled into a
+                        # plausible-looking commercial industry.
+                        primary_type = place.get("primaryType", "")
+                        if is_institution_place_type(primary_type):
+                            logger.debug(
+                                f"Filtered non-commercial institution ({primary_type}): {display_name}"
+                            )
+                            continue
+
                         # Use Google's actual primaryType for accurate industry
                         # classification instead of blindly using our search category.
                         # If Google classifies this place as something outside our
                         # hardcoded local-business industries (e.g. parking, bank,
                         # real estate agency), skip it rather than mislabeling it.
-                        primary_type = place.get("primaryType", "")
                         actual_industry = self._type_to_industry(primary_type, category)
                         if actual_industry is None:
                             logger.debug(
@@ -167,10 +181,13 @@ class GoogleMapsConnector(BaseConnector):
         This ensures that if we searched for 'salon' but Google returned a
         sports centre, we label it correctly as 'sports' not 'salon'.
 
-        Returns None when primary_type is present but not a recognized
-        local-business industry (e.g. parking, bank, real_estate_agency) —
-        the caller should skip that result rather than mislabel it via
-        fallback_category.
+        Returns None when primary_type is present, specific, and not a
+        recognized local-business industry (e.g. parking, bank,
+        real_estate_agency) — the caller should skip that result rather than
+        mislabel it via fallback_category. Google's own generic/uninformative
+        types (e.g. "point_of_interest", "establishment") are not confirmed
+        evidence of a different business — those still fall back to
+        fallback_category, same as no primary_type at all.
         """
         type_industry_map = {
             "restaurant": "restaurant",
@@ -190,7 +207,6 @@ class GoogleMapsConnector(BaseConnector):
             "athletic_field": "sports",
             "doctor": "clinic",
             "dentist": "clinic",
-            "hospital": "clinic",
             "health": "clinic",
             "pharmacy": "clinic",
             "spa": "spa",
@@ -199,10 +215,10 @@ class GoogleMapsConnector(BaseConnector):
             "clothing_store": "fashion",
             "shoe_store": "fashion",
             "jewelry_store": "fashion",
-            "school": "tuition",
-            "primary_school": "tuition",
-            "secondary_school": "tuition",
-            "community_center": "sports",
+            # Note: "school"/"primary_school"/"secondary_school"/"hospital"/
+            # "community_center" are non-commercial institutions, rejected by
+            # is_institution_place_type() above before this map is ever
+            # consulted for them — intentionally absent here, not an oversight.
             "meal_delivery": "restaurant",
             "meal_takeaway": "restaurant",
             "bar": "restaurant",
@@ -212,6 +228,11 @@ class GoogleMapsConnector(BaseConnector):
             "supermarket": "retail",
             "convenience_store": "retail",
         }
-        if primary_type:
+        # Google's own generic catch-all types carry no information about what
+        # kind of place this is, unlike a specific-but-unmapped type (e.g.
+        # "parking") which is confirmed evidence it's not a local business we
+        # searched for.
+        generic_types = {"point_of_interest", "establishment", "premise", "subpremise"}
+        if primary_type and primary_type.lower() not in generic_types:
             return type_industry_map.get(primary_type.lower())
         return fallback_category

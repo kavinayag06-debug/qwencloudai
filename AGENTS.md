@@ -63,3 +63,20 @@ set `DATABASE_URL` to a tmp path are not actually isolating the database file;
 they still read/write the real `data/app.db` in the repo. This is pre-existing
 behavior, not something introduced by tests — be aware of it if a test's
 assertions seem to depend on stale state from a previous run.
+
+## `GoogleMapsConnector._type_to_industry` distinguishes generic vs specific unmapped types
+
+In `app/connectors/google_maps_connector.py`, specific unmapped Google place
+types are rejected instead of being relabeled as the search category, while
+Google's generic catch-all types fall back to that category because they carry
+no industry information. Preserve this distinction so unrelated places are
+excluded without dropping legitimate businesses that Google labels only as
+`point_of_interest`, `establishment`, `premise`, or `subpremise`.
+`tests/test_discovery.py` owns the regression coverage.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.

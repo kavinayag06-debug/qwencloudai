@@ -5,6 +5,7 @@ from typing import Optional
 
 from app.config import get_settings
 from app.connectors.base import BaseConnector, DiscoveryResult
+from app.connectors.institution_filter import is_institution_name_or_domain
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +52,14 @@ class ExaConnector(BaseConnector):
                 )
 
                 for item in search_results.results:
+                    name = item.title or "Unknown"
+                    url = item.url or ""
+                    if is_institution_name_or_domain(name, url):
+                        logger.debug(f"Filtered likely non-commercial institution: {name}")
+                        continue
                     results.append(DiscoveryResult(
-                        company_name=item.title or "Unknown",
-                        website_url=item.url or "",
+                        company_name=name,
+                        website_url=url,
                         industry=category,
                         location=location,
                         description=getattr(item, "text", "")[:500],

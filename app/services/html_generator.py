@@ -361,17 +361,19 @@ class HTMLGenerator:
         2. Google Places photos for this business (owner/visitor-submitted,
            real photos of the actual place — not generic stock).
 
-        If neither has anything usable, returns empty and the build prompt
-        goes photo-free (CSS-only) rather than using a fake/generic image.
-        Returns filenames (relative to lead_dir/images/) that were saved.
+        Stock photography is never substituted. If neither source has
+        anything usable, returns empty and the build prompt goes photo-free
+        (CSS-only) rather than using a fake/generic image. Returns filenames
+        (relative to lead_dir/images/) that were saved.
         """
         images_dir = lead_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
         saved: list[str] = []
         attributions: dict[str, str] = {}
+        attempted = bool(lead.source_image_urls)
 
-        # Step 1: Try to download real photos from the client's website
-        if lead.source_image_urls:
+        # Try to download real photos from the client's website
+        if attempted:
             async with httpx.AsyncClient(
                 timeout=15.0, follow_redirects=True,
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
@@ -405,7 +407,7 @@ class HTMLGenerator:
         if saved:
             lead.add_log(f"Downloaded {len(saved)} real photos from the client's site")
 
-        # Step 2: If the site had nothing, fall back to this business's real
+        # If the site had nothing, fall back to this business's real
         # Google Places photos (still real, still specific to this business —
         # never a generic/stock substitute).
         settings = get_settings()
@@ -441,7 +443,17 @@ class HTMLGenerator:
                 lead.add_log(f"Using {len(saved)} real Google Places photos of this business (client site had none)")
 
         if not saved:
-            lead.add_log("No real photos available (client site or Google Places); using a photo-free design")
+            if attempted:
+                lead.add_log(
+                    f"Source photo extraction failed for all {len(lead.source_image_urls)} "
+                    "candidate(s), and no Google Places photos were available — "
+                    "generating a photo-free design"
+                )
+            else:
+                lead.add_log(
+                    "No real photos available (client site or Google Places); "
+                    "using a photo-free design"
+                )
 
         lead.local_image_paths = saved
         lead.image_attributions = attributions
