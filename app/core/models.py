@@ -55,9 +55,9 @@ class StyleTraits(BaseModel):
     design_patterns: list[str] = Field(default_factory=list)
     quality_score: int = Field(default=70, ge=0, le=100)
     # Paths to the actual reference screenshots these traits were derived from.
-    # Kept alongside the text summary so downstream steps (HTML build + critique)
-    # can attach the real images to the model call instead of only a paraphrase.
     reference_image_paths: list[str] = Field(default_factory=list)
+    # Source of the references: "scraped", "local_fallback", or "defaults"
+    reference_source: str = ""
 
 
 class ConfidenceScore(BaseModel):

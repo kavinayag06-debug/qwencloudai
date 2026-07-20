@@ -99,7 +99,7 @@ class GoogleMapsConnector(BaseConnector):
                             company_name=display_name,
                             website_url=website,
                             industry=actual_industry,
-                            location=location,
+                            location=self._extract_short_location(address, location),
                             address=address,
                             phone=phone,
                             source="google_maps",
@@ -189,3 +189,42 @@ class GoogleMapsConnector(BaseConnector):
             if industry:
                 return industry
         return fallback_category
+
+    @staticmethod
+    def _extract_short_location(address: str, fallback: str) -> str:
+        """Extract a short neighborhood/area name from a full Google address.
+
+        e.g. '1 Jurong West Central 3, #01-01, Singapore 648886'
+             -> 'Jurong West, Singapore'
+        """
+        if not address:
+            return fallback
+
+        # Singapore addresses typically end with 'Singapore XXXXXX'
+        # Try to extract the neighborhood from the address parts
+        parts = [p.strip() for p in address.split(",")]
+
+        # Look for a part that contains a recognizable area name (not just a number)
+        # Skip the first part (usually street number + name) and the last (country + postal)
+        if len(parts) >= 3:
+            # Try the second-to-last part or a middle part that looks like a neighborhood
+            for part in parts[1:-1]:
+                # Skip parts that are just unit numbers like '#01-01'
+                if part.startswith("#") or part.strip().isdigit():
+                    continue
+                # Skip Singapore postal codes
+                if "Singapore" in part and any(c.isdigit() for c in part):
+                    continue
+                return f"{part}, Singapore"
+
+        # If the address has 'Singapore' in it, try to grab area from first part
+        if "Singapore" in address and len(parts) >= 2:
+            first = parts[0]
+            # Try to get a general area from the street name
+            # Remove street numbers from the beginning
+            words = first.split()
+            area_words = [w for w in words if not w.isdigit() and not w.startswith("#")]
+            if area_words:
+                return f"{' '.join(area_words[:3])}, Singapore"
+
+        return fallback

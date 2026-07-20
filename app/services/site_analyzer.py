@@ -117,15 +117,102 @@ class SiteAnalyzer:
         return lead
 
     async def _fetch_page(self, url: str) -> tuple[Optional[str], list[str]]:
-        """Fetch a URL once and extract both text content and candidate photo URLs.
+        """Fetch a URL and extract both text content and candidate photo URLs.
 
-        Returns (text_content, image_urls). image_urls is ordered by likely
-        relevance: og:image first, then <img> tags with real business photos
-        (icons, logos, and tracking pixels are filtered out heuristically).
+        Primary: Uses Playwright to render JS-heavy pages, scroll to trigger
+        lazy-loading, then extracts images from the live DOM (covers srcset,
+        data-original, CSS background-image on hero elements, etc.)
+
+        Fallback: plain httpx GET + BeautifulSoup if Playwright unavailable.
+
+        Returns (text_content, image_urls).
         """
         if not url or url.startswith("https://example.com"):
             return None, []
 
+        # Try Playwright first — renders JS, scrolls for lazy content
+        try:
+            from playwright.async_api import async_playwright
+
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page(viewport={"width": 1440, "height": 900})
+                await page.goto(url, wait_until="networkidle", timeout=25000)
+
+                # Scroll down to trigger lazy-loaded images
+                for _ in range(5):
+                    await page.evaluate("window.scrollBy(0, window.innerHeight)")
+                    await page.wait_for_timeout(400)
+                await page.evaluate("window.scrollTo(0, 0)")
+
+                # Extract images from the live rendered DOM
+                image_urls = await page.evaluate("""() => {
+                    const skip = /logo|icon|sprite|pixel|avatar|badge|spinner|data:/i;
+                    const urls = new Set();
+
+                    // og:image and twitter:image
+                    document.querySelectorAll('meta[property="og:image"], meta[name="twitter:image"]')
+                        .forEach(m => { if (m.content && !skip.test(m.content)) urls.add(m.content); });
+
+                    // All <img> tags — check src, srcset, data-src, data-lazy-src, data-original
+                    document.querySelectorAll('img').forEach(img => {
+                        const candidates = [
+                            img.src, img.dataset.src, img.dataset.lazySrc,
+                            img.dataset.original, img.getAttribute('data-src'),
+                            img.getAttribute('data-lazy-src'), img.getAttribute('data-original')
+                        ];
+                        // Also extract first URL from srcset
+                        const srcset = img.getAttribute('srcset');
+                        if (srcset) {
+                            const first = srcset.split(',')[0].trim().split(/\\s+/)[0];
+                            candidates.push(first);
+                        }
+                        // Skip tiny images
+                        if ((img.naturalWidth > 0 && img.naturalWidth < 80) ||
+                            (img.naturalHeight > 0 && img.naturalHeight < 80)) return;
+
+                        for (const c of candidates) {
+                            if (c && c.startsWith('http') && !skip.test(c)) {
+                                urls.add(c);
+                                break;
+                            }
+                        }
+                    });
+
+                    // CSS background-image on hero/banner elements
+                    document.querySelectorAll('[class*="hero"], [class*="banner"], [class*="bg"], section, .header')
+                        .forEach(el => {
+                            const bg = getComputedStyle(el).backgroundImage;
+                            if (bg && bg !== 'none') {
+                                const match = bg.match(/url\\(["']?(https?[^"')]+)["']?\\)/);
+                                if (match && !skip.test(match[1])) urls.add(match[1]);
+                            }
+                        });
+
+                    return [...urls].slice(0, 8);
+                }""")
+
+                # Extract text content
+                text = await page.evaluate("""() => {
+                    const remove = document.querySelectorAll('script, style, nav, footer, header');
+                    remove.forEach(el => el.remove());
+                    return document.body.innerText.substring(0, 5000);
+                }""")
+
+                await browser.close()
+
+                if text and len(text.strip()) > 50:
+                    return text[:5000], image_urls
+                # If text is too short, fall through to httpx
+                if image_urls:
+                    return text[:5000] if text else None, image_urls
+
+        except ImportError:
+            logger.info("Playwright not available for page fetch, using httpx fallback")
+        except Exception as e:
+            logger.warning(f"Playwright fetch failed for {url}, falling back to httpx: {e}")
+
+        # Fallback: plain HTTP
         try:
             async with httpx.AsyncClient(
                 timeout=20.0,
@@ -156,7 +243,10 @@ class SiteAnalyzer:
 
         Heuristics: prefer og:image / twitter:image (usually the site's best
         hero photo), then large <img> tags, skipping obvious icons, logos,
-        tracking pixels, and data: URIs (which we can't safely re-host).
+        tracking pixels, and data: URIs.
+
+        Checks src, data-src, data-lazy-src, data-original, and srcset.
+        Also looks for CSS background-image on hero/banner elements.
         """
         skip_hints = ("logo", "icon", "sprite", "pixel", "avatar", "badge", "spinner")
         urls: list[str] = []
@@ -176,13 +266,27 @@ class SiteAnalyzer:
                 seen.add(resolved)
                 urls.append(resolved)
 
+        # Meta tags (highest quality hero images)
         for meta_name in ("og:image", "og:image:secure_url", "twitter:image"):
             tag = soup.find("meta", attrs={"property": meta_name}) or soup.find("meta", attrs={"name": meta_name})
             if tag and tag.get("content"):
                 add(tag["content"])
 
+        # <img> tags with multiple lazy-load attribute patterns
         for img in soup.find_all("img"):
-            src = img.get("src") or img.get("data-src") or img.get("data-lazy-src")
+            src = (
+                img.get("src")
+                or img.get("data-src")
+                or img.get("data-lazy-src")
+                or img.get("data-original")
+            )
+            # Also check srcset — take the first (usually largest) URL
+            if not src:
+                srcset = img.get("srcset")
+                if srcset:
+                    first = srcset.split(",")[0].strip().split()[0]
+                    src = first
+
             # Skip tiny images (width/height attrs are a weak but free signal)
             try:
                 width = int(img.get("width", 0) or 0)
@@ -192,6 +296,17 @@ class SiteAnalyzer:
             except ValueError:
                 pass
             add(src)
+            if len(urls) >= limit:
+                break
+
+        # CSS background-image on hero/banner elements
+        import re
+        bg_pattern = re.compile(r'url\(["\']?(https?://[^"\')\s]+)["\']?\)')
+        for el in soup.find_all(attrs={"style": bg_pattern}):
+            style = el.get("style", "")
+            match = bg_pattern.search(style)
+            if match:
+                add(match.group(1))
             if len(urls) >= limit:
                 break
 

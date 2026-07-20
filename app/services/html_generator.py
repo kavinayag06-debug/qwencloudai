@@ -10,6 +10,7 @@ For each shortlisted client:
 import hashlib
 import logging
 from pathlib import Path
+from typing import Optional
 
 import httpx
 
@@ -239,6 +240,7 @@ class HTMLGenerator:
             brief = await self._plan(llm, lead, style_traits)
 
             html_content = await self._build(vision, lead, style_traits, brief, reference_images, local_images)
+            lead.add_log(f"Style palette used: {style_traits.color_palette} (source: {style_traits.reference_source})")
             best_html = html_content if self._looks_like_html(html_content) else None
             best_score = -1
 
@@ -246,7 +248,11 @@ class HTMLGenerator:
                 if not self._looks_like_html(html_content):
                     break
 
-                critique = await self._critique(vision, lead, html_content, reference_images)
+                # Render a screenshot of the current HTML so the critic judges
+                # the actual rendered output, not just raw code
+                rendered_screenshot = await self._render_for_critique(html_content, lead_dir, round_num)
+
+                critique = await self._critique(vision, lead, html_content, reference_images, rendered_screenshot)
                 score = int(critique.get("score", 0))
                 issues = critique.get("issues", [])
                 lead.add_log(f"Design critique round {round_num + 1}: score={score}, issues={len(issues)}")
@@ -279,7 +285,7 @@ class HTMLGenerator:
         if fallback_reason:
             warn_msg = f"NOT an AI-generated design — {fallback_reason}"
             logger.warning(warn_msg)
-            lead.add_log(f"AI not configured or failed: using fallback template. This is NOT an AI-generated design.")
+            lead.add_log(f"⚠ FALLBACK TEMPLATE USED (not AI-generated). Reason: {fallback_reason}")
 
         # Save HTML file
         lead_dir.mkdir(parents=True, exist_ok=True)
@@ -337,17 +343,29 @@ class HTMLGenerator:
         images_dir.mkdir(parents=True, exist_ok=True)
         saved: list[str] = []
 
+        # Use Referer header matching the lead's site — some CDNs (Wix,
+        # Squarespace, Cloudinary) 403 requests with missing/wrong referer.
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Referer": lead.website_url or "",
+        }
+
         async with httpx.AsyncClient(
-            timeout=15.0, follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            timeout=15.0, follow_redirects=True, headers=headers,
         ) as client:
             for i, url in enumerate(lead.source_image_urls[:MAX_SOURCE_IMAGES]):
                 try:
                     resp = await client.get(url)
                     if resp.status_code != 200:
+                        logger.warning(
+                            f"Image download failed (HTTP {resp.status_code}): {url[:80]} "
+                            f"— may be hotlink-blocked by CDN"
+                        )
+                        lead.add_log(f"Image {i+1} download failed: HTTP {resp.status_code} for {url[:60]}")
                         continue
                     content_type = resp.headers.get("content-type", "")
                     if not content_type.startswith("image/"):
+                        logger.warning(f"Image URL returned non-image content-type: {content_type} for {url[:80]}")
                         continue
                     if len(resp.content) < 2048:  # almost certainly an icon/pixel, not a photo
                         continue
@@ -362,15 +380,57 @@ class HTMLGenerator:
                     (images_dir / filename).write_bytes(resp.content)
                     saved.append(filename)
                 except Exception as e:
-                    logger.warning(f"Could not download image {url}: {e}")
+                    logger.warning(f"Could not download image {url[:80]}: {e}")
+                    lead.add_log(f"Image {i+1} download exception: {e}")
                     continue
 
         lead.local_image_paths = saved
         if saved:
             lead.add_log(f"Downloaded {len(saved)} real photos from the client's site")
         else:
-            lead.add_log("No usable photos found on the client's site; using a photo-free design")
+            lead.add_log(
+                f"No usable photos downloaded (tried {len(lead.source_image_urls[:MAX_SOURCE_IMAGES])} URLs); "
+                f"using a photo-free CSS-only design"
+            )
         return saved
+
+    async def _render_for_critique(self, html_content: str, lead_dir: Path, round_num: int) -> Optional[Path]:
+        """Render the current HTML to a screenshot for the critic to judge visually.
+
+        Returns the path to the screenshot, or None if Playwright isn't available.
+        """
+        try:
+            from playwright.async_api import async_playwright
+
+            lead_dir.mkdir(parents=True, exist_ok=True)
+            # Write a temporary HTML file for rendering
+            tmp_html = lead_dir / f"_critique_round_{round_num}.html"
+            tmp_html.write_text(html_content, encoding="utf-8")
+
+            screenshot_path = lead_dir / f"_critique_screenshot_{round_num}.png"
+
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page(viewport={"width": 1440, "height": 900})
+                await page.goto(tmp_html.resolve().as_uri(), wait_until="networkidle")
+                # Wait a moment for fonts/animations
+                await page.wait_for_timeout(500)
+                await page.screenshot(path=str(screenshot_path), full_page=True)
+                await browser.close()
+
+            # Clean up temp HTML
+            tmp_html.unlink(missing_ok=True)
+
+            if screenshot_path.exists():
+                logger.info(f"Critique screenshot rendered: {screenshot_path.name}")
+                return screenshot_path
+
+        except ImportError:
+            logger.warning("Playwright not available — critic will judge raw HTML only")
+        except Exception as e:
+            logger.warning(f"Critique screenshot render failed: {e}")
+
+        return None
 
     async def _plan(self, llm, lead: Lead, style_traits: StyleTraits) -> dict:
         """Planner step: produce a business-specific content brief before any HTML is written."""
@@ -507,16 +567,29 @@ Place the map div INSIDE the contact section, after the address text."""
         )
         return self._strip_code_fence(response.content)
 
-    async def _critique(self, vision, lead: Lead, html_content: str, reference_images: list[Path]) -> dict:
+    async def _critique(self, vision, lead: Lead, html_content: str,
+                        reference_images: list[Path], rendered_screenshot: Optional[Path] = None) -> dict:
         """Critic step: score the generated HTML against commercial-quality
-        standards AND fidelity to the attached reference designs."""
+        standards AND fidelity to the attached reference designs.
+
+        When a rendered_screenshot is available, the critic judges the actual
+        visual output — not just the raw HTML code."""
         prompt = HTML_CRITIQUE_PROMPT.format(
             company_name=lead.company_name,
             industry=lead.industry,
-            html_content=html_content,
+            html_content=html_content if not rendered_screenshot else html_content[:3000] + "\n... (truncated, see rendered screenshot below)",
             award_reference=AWARD_REFERENCE_STYLES.get(lead.industry.lower().strip(), DEFAULT_AWARD_REFERENCE),
         )
         content_parts = [{"type": "text", "text": prompt}]
+
+        # Attach the rendered screenshot so the critic judges what actually rendered
+        if rendered_screenshot and rendered_screenshot.exists():
+            content_parts.append({
+                "type": "text",
+                "text": "\n📸 RENDERED SCREENSHOT of the generated page (this is what the client will actually see — judge layout, spacing, visual hierarchy, and responsiveness from THIS image, not just the code above):",
+            })
+            content_parts.extend(build_image_content_parts([rendered_screenshot]))
+
         if reference_images:
             content_parts.append({
                 "type": "text",

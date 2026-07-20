@@ -67,6 +67,9 @@
                 {% if lead.website_url %}
                 <br><small class="url">{{ lead.website_url[:40] }}...</small>
                 {% endif %}
+                {% if lead.logs and '⚠ FALLBACK TEMPLATE USED' in lead.logs|join(' ') %}
+                <br><span class="badge" style="background:#fef2f2;color:#dc2626;font-size:0.65rem;margin-top:4px;">⚠ Fallback — not AI</span>
+                {% endif %}
             </td>
             <td>{{ lead.industry }}</td>
             <td>{{ lead.location }}</td>
