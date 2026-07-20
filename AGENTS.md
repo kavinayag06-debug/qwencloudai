@@ -63,3 +63,28 @@ set `DATABASE_URL` to a tmp path are not actually isolating the database file;
 they still read/write the real `data/app.db` in the repo. This is pre-existing
 behavior, not something introduced by tests — be aware of it if a test's
 assertions seem to depend on stale state from a previous run.
+
+## `GoogleMapsConnector._type_to_industry` distinguishes generic vs specific unmapped types
+
+A result whose Google `primaryType` isn't in `type_industry_map` is dropped
+(not mislabeled via the search category) — *unless* the type is one of
+Google's own generic catch-alls (`point_of_interest`, `establishment`,
+`premise`, `subpremise`), which carry no information about what kind of place
+it is and still fall back to the search category. This line exists because
+two independently-written fixes landed on the same function with conflicting
+intent: one commit restricted discovery to a hardcoded industry list (drop
+anything unmapped, so a parking lot returned under a "restaurant" search
+doesn't get mislabeled "restaurant"), while another added
+`is_institution_place_type` filtering plus a regression test
+(`test_google_maps_connector_excludes_institutions`) requiring a legitimate
+business under an ambiguous type (e.g. a tuition centre Google has no
+dedicated category for) to still pass through. If you touch this function,
+re-run that test — it's the one guarding this distinction, and dropping the
+generic-type carve-out silently excludes real businesses again.
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.
