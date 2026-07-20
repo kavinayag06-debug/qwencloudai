@@ -181,10 +181,13 @@ class GoogleMapsConnector(BaseConnector):
         This ensures that if we searched for 'salon' but Google returned a
         sports centre, we label it correctly as 'sports' not 'salon'.
 
-        Returns None when primary_type is present but not a recognized
-        local-business industry (e.g. parking, bank, real_estate_agency) —
-        the caller should skip that result rather than mislabel it via
-        fallback_category.
+        Returns None when primary_type is present, specific, and not a
+        recognized local-business industry (e.g. parking, bank,
+        real_estate_agency) — the caller should skip that result rather than
+        mislabel it via fallback_category. Google's own generic/uninformative
+        types (e.g. "point_of_interest", "establishment") are not confirmed
+        evidence of a different business — those still fall back to
+        fallback_category, same as no primary_type at all.
         """
         type_industry_map = {
             "restaurant": "restaurant",
@@ -225,6 +228,11 @@ class GoogleMapsConnector(BaseConnector):
             "supermarket": "retail",
             "convenience_store": "retail",
         }
-        if primary_type:
+        # Google's own generic catch-all types carry no information about what
+        # kind of place this is, unlike a specific-but-unmapped type (e.g.
+        # "parking") which is confirmed evidence it's not a local business we
+        # searched for.
+        generic_types = {"point_of_interest", "establishment", "premise", "subpremise"}
+        if primary_type and primary_type.lower() not in generic_types:
             return type_industry_map.get(primary_type.lower())
         return fallback_category
