@@ -406,13 +406,6 @@ class HTMLGenerator:
 
         if saved:
             lead.add_log(f"Downloaded {len(saved)} real photos from the client's site")
-        elif attempted:
-            lead.add_log(
-                f"Source photo extraction failed for all {len(lead.source_image_urls)} "
-                "candidate(s) — generating a photo-free design"
-            )
-        else:
-            lead.add_log("No source-business photos available — generating a photo-free design")
 
         # Step 2: If the site had nothing, fall back to this business's real
         # Google Places photos (still real, still specific to this business —
@@ -450,7 +443,17 @@ class HTMLGenerator:
                 lead.add_log(f"Using {len(saved)} real Google Places photos of this business (client site had none)")
 
         if not saved:
-            lead.add_log("No real photos available (client site or Google Places); using a photo-free design")
+            if attempted:
+                lead.add_log(
+                    f"Source photo extraction failed for all {len(lead.source_image_urls)} "
+                    "candidate(s), and no Google Places photos were available — "
+                    "generating a photo-free design"
+                )
+            else:
+                lead.add_log(
+                    "No real photos available (client site or Google Places); "
+                    "using a photo-free design"
+                )
 
         lead.local_image_paths = saved
         lead.image_attributions = attributions

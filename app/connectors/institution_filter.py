@@ -11,6 +11,9 @@ not touch words like "clinic", "dental", or "tuition" so legitimate small
 businesses are never rejected.
 """
 
+import re
+from urllib.parse import urlsplit
+
 # Google Places API (New) primaryType values that indicate a non-commercial
 # institution rather than a small business, even when the search query that
 # found them targeted a legitimate business category (e.g. "tuition" ->
@@ -29,19 +32,17 @@ GOOGLE_INSTITUTION_TYPES = {
 # "clinic", "dental", "medical", "tuition", or "care" are never included,
 # since those are legitimate small-business categories this app targets.
 _INSTITUTION_NAME_HINTS = (
-    "primary school", "secondary school", "international school",
+    "primary school", "secondary school", "high school", "international school",
     "university", "polytechnic",
     "ministry of", "town council", "city council", "municipal council",
     "public hospital", "general hospital", "polyclinic",
     "community centre", "community center", "community club",
-    "place of worship", "hindu temple", "buddhist temple",
+    "place of worship", "church", "mosque", "synagogue", "hindu temple", "buddhist temple",
     "public library", "national library",
     "fire station", "police station", "courthouse", "embassy of",
 )
 
-# Domain suffixes/substrings that reliably indicate an official institutional
-# site rather than a commercial business.
-_INSTITUTION_DOMAIN_HINTS = (".gov", ".edu", ".mil")
+_INSTITUTION_DOMAIN_LABELS = {"gov", "edu", "mil"}
 
 
 def is_institution_place_type(primary_type: str) -> bool:
@@ -62,9 +63,18 @@ def is_institution_name_or_domain(name: str, url: str = "") -> bool:
     clinics would also use.
     """
     lowered_name = (name or "").lower()
-    lowered_url = (url or "").lower()
-    if any(hint in lowered_url for hint in _INSTITUTION_DOMAIN_HINTS):
+    parsed_url = urlsplit(url if "://" in (url or "") else f"//{url or ''}")
+    hostname_labels = (parsed_url.hostname or "").lower().rstrip(".").split(".")
+    domain_suffix = (
+        hostname_labels[-2:]
+        if hostname_labels and len(hostname_labels[-1]) == 2
+        else hostname_labels[-1:]
+    )
+    if any(label in _INSTITUTION_DOMAIN_LABELS for label in domain_suffix):
         return True
-    if any(hint in lowered_name for hint in _INSTITUTION_NAME_HINTS):
+    if any(
+        re.search(rf"(?<!\w){re.escape(hint)}(?!\w)", lowered_name)
+        for hint in _INSTITUTION_NAME_HINTS
+    ):
         return True
     return False

@@ -52,6 +52,13 @@ def test_name_domain_filter_catches_schools_and_government_domains():
     assert is_institution_name_or_domain("National Library Board", "https://nlb.example") is True
 
 
+def test_name_filter_catches_common_institution_names():
+    assert is_institution_name_or_domain("Westview High School") is True
+    assert is_institution_name_or_domain("St Mary's Church") is True
+    assert is_institution_name_or_domain("Masjid Al Noor Mosque") is True
+    assert is_institution_name_or_domain("Beth Shalom Synagogue") is True
+
+
 def test_name_domain_filter_allows_legitimate_small_businesses():
     """Never rejects commercial tuition centres or private clinics — the
     exact protected categories called out in ship-instructions.md."""
@@ -60,6 +67,16 @@ def test_name_domain_filter_allows_legitimate_small_businesses():
     assert is_institution_name_or_domain("Bright Minds Learning Centre", "https://brightminds.sg") is False
     assert is_institution_name_or_domain("Glamour Cuts Salon", "https://example.com/glamour-cuts") is False
     assert is_institution_name_or_domain("The Bake House", "https://example.com/bake-house") is False
+    assert is_institution_name_or_domain("Education Centre", "https://educationcentre.sg") is False
+    assert is_institution_name_or_domain("Churchill Florist", "https://churchill.example") is False
+
+
+def test_domain_filter_matches_only_institutional_hostname_suffixes():
+    assert is_institution_name_or_domain("Example", "https://example.edu") is True
+    assert is_institution_name_or_domain("Example", "https://dept.example.edu.sg/path") is True
+    assert is_institution_name_or_domain("Example", "example.gov.uk") is True
+    assert is_institution_name_or_domain("Example", "https://example.mil") is True
+    assert is_institution_name_or_domain("Example", "https://edu.example.com") is False
 
 
 def test_name_domain_filter_handles_missing_fields():

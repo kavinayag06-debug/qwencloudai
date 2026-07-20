@@ -6,6 +6,8 @@ import pytest
 import tempfile
 from pathlib import Path
 
+import httpx
+
 os.environ["LLM_PROVIDER"] = "mock"
 os.environ["VISION_PROVIDER"] = "mock"
 
@@ -214,3 +216,35 @@ async def test_source_photo_extraction_failure_is_logged_distinctly(sample_lead,
     assert result.local_image_paths == []
     assert any("extraction failed" in log for log in result.logs)
     assert not any("No source-business photos available" in log for log in result.logs)
+
+
+@pytest.mark.asyncio
+async def test_google_photo_fallback_does_not_log_photo_free_design(
+    sample_lead, tmp_path, monkeypatch
+):
+    sample_lead.source_image_urls = ["https://realbiz.example/missing.jpg"]
+    sample_lead.google_photo_refs = ["places/example/photos/1"]
+
+    class Response:
+        content = b"real image bytes"
+
+        def __init__(self, status_code, content_type=""):
+            self.status_code = status_code
+            self.headers = {"content-type": content_type}
+
+    async def fake_get(self, url, params=None):
+        if "places.googleapis.com" in url:
+            return Response(200, "image/jpeg")
+        return Response(404)
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr(
+        "app.services.html_generator.get_settings",
+        lambda: type("Settings", (), {"google_maps_api_key": "test-key"})(),
+    )
+
+    saved = await HTMLGenerator()._prepare_images(sample_lead, tmp_path)
+
+    assert saved == ["gphoto_1.jpg"]
+    assert any("Google Places photos" in log for log in sample_lead.logs)
+    assert not any("photo-free" in log for log in sample_lead.logs)
