@@ -60,7 +60,8 @@ class GoogleMapsConnector(BaseConnector):
                             "places.nationalPhoneNumber,"
                             "places.location,"
                             "places.primaryType,"
-                            "places.id"
+                            "places.id,"
+                            "places.photos"
                         ),
                     }
                     body = {
@@ -91,9 +92,29 @@ class GoogleMapsConnector(BaseConnector):
                         place_lng = loc.get("longitude")
 
                         # Use Google's actual primaryType for accurate industry
-                        # classification instead of blindly using our search category
+                        # classification instead of blindly using our search category.
+                        # If Google classifies this place as something outside our
+                        # hardcoded local-business industries (e.g. parking, bank,
+                        # real estate agency), skip it rather than mislabeling it.
                         primary_type = place.get("primaryType", "")
                         actual_industry = self._type_to_industry(primary_type, category)
+                        if actual_industry is None:
+                            logger.debug(
+                                f"Skipping '{display_name}': primaryType "
+                                f"'{primary_type}' is not a recognized local-business industry"
+                            )
+                            continue
+
+                        # Real, business-specific photos (owner/visitor-submitted) to
+                        # fall back on when the business's own website has none —
+                        # never fabricated, just a second real source.
+                        photos = place.get("photos", [])
+                        photo_refs = [p["name"] for p in photos[:3] if p.get("name")]
+                        photo_attribution = ""
+                        if photos:
+                            authors = photos[0].get("authorAttributions", [])
+                            if authors:
+                                photo_attribution = authors[0].get("displayName", "")
 
                         results.append(DiscoveryResult(
                             company_name=display_name,
@@ -105,6 +126,8 @@ class GoogleMapsConnector(BaseConnector):
                             source="google_maps",
                             latitude=place_lat,
                             longitude=place_lng,
+                            google_photo_refs=photo_refs,
+                            google_photo_attribution=photo_attribution,
                         ))
 
                     logger.info(f"Google Places: '{category}' returned {len(data.get('places', []))} results")
@@ -138,11 +161,16 @@ class GoogleMapsConnector(BaseConnector):
         return type_map.get(category.lower(), category.lower())
 
     @staticmethod
-    def _type_to_industry(primary_type: str, fallback_category: str) -> str:
+    def _type_to_industry(primary_type: str, fallback_category: str) -> Optional[str]:
         """Map Google's primaryType back to a human-readable industry label.
 
         This ensures that if we searched for 'salon' but Google returned a
         sports centre, we label it correctly as 'sports' not 'salon'.
+
+        Returns None when primary_type is present but not a recognized
+        local-business industry (e.g. parking, bank, real_estate_agency) —
+        the caller should skip that result rather than mislabel it via
+        fallback_category.
         """
         type_industry_map = {
             "restaurant": "restaurant",
@@ -185,7 +213,5 @@ class GoogleMapsConnector(BaseConnector):
             "convenience_store": "retail",
         }
         if primary_type:
-            industry = type_industry_map.get(primary_type.lower())
-            if industry:
-                return industry
+            return type_industry_map.get(primary_type.lower())
         return fallback_category

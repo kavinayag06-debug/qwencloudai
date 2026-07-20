@@ -172,6 +172,8 @@ class DiscoveryService:
                 description=result.description,
                 discovery_source=result.source,
                 status=LeadStatus.DISCOVERED,
+                google_photo_refs=result.google_photo_refs,
+                google_photo_attribution=result.google_photo_attribution,
             )
             lead.add_log(f"Discovered via {result.source} in {request.location}")
             lead = db.save_lead(lead)
