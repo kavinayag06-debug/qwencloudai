@@ -6,7 +6,7 @@ Switch providers by changing .env only - no code changes needed.
 
 Supported providers: openai, qwen, openrouter, mock
 
-WE ARE USING QWEN3.7-MAX FOR "LLM PROVIDER" AND QWEN3-VL-PLUS FOR "VISION PROVIDER" 
+WE ARE USING QWEN3.7-MAX FOR "LLM PROVIDER" AND QWEN3-VL-PLUS FOR "VISION PROVIDER" (lines 150-180)
 
 """
 
