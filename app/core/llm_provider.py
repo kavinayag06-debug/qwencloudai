@@ -5,6 +5,9 @@ All model calls go through this single interface.
 Switch providers by changing .env only - no code changes needed.
 
 Supported providers: openai, qwen, openrouter, mock
+
+WE ARE USING QWEN3.7-MAX FOR "LLM PROVIDER" AND QWEN3-VL-PLUS FOR "VISION PROVIDER" 
+
 """
 
 import json
