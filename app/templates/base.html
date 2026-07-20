@@ -70,14 +70,21 @@
             });
         }
     })();
-    // Settings popup
-    document.getElementById('settings-toggle').addEventListener('click', function(e) {
-        e.stopPropagation();
-        document.getElementById('settings-popup').classList.toggle('open');
-    });
+    // Settings popup — only present on pages using the full header (base.html's
+    // default header block); pages that render the compact _page_header.html
+    // instead (lead detail, logs, settings) have neither element, so both
+    // lookups are guarded rather than assumed to exist.
+    var settingsToggle = document.getElementById('settings-toggle');
+    if (settingsToggle) {
+        settingsToggle.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var popup = document.getElementById('settings-popup');
+            if (popup) popup.classList.toggle('open');
+        });
+    }
     document.addEventListener('click', function(e) {
         var popup = document.getElementById('settings-popup');
-        if (!e.target.closest('.settings-popup-wrapper')) {
+        if (popup && !e.target.closest('.settings-popup-wrapper')) {
             popup.classList.remove('open');
         }
     });

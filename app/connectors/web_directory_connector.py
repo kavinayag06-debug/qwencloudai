@@ -7,6 +7,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.connectors.base import BaseConnector, DiscoveryResult
+from app.connectors.institution_filter import is_institution_name_or_domain
 
 logger = logging.getLogger(__name__)
 
@@ -56,14 +57,18 @@ class WebDirectoryConnector(BaseConnector):
                     for link in links[:3]:
                         href = link.get("href", "")
                         title = link.get_text(strip=True)
-                        if href and title and "ad" not in href.lower():
-                            results.append(DiscoveryResult(
-                                company_name=title,
-                                website_url=href,
-                                industry=category,
-                                location=location,
-                                source="web_directory",
-                            ))
+                        if not href or not title or "ad" in href.lower():
+                            continue
+                        if is_institution_name_or_domain(title, href):
+                            logger.debug(f"Filtered likely non-commercial institution: {title}")
+                            continue
+                        results.append(DiscoveryResult(
+                            company_name=title,
+                            website_url=href,
+                            industry=category,
+                            location=location,
+                            source="web_directory",
+                        ))
 
                 except Exception as e:
                     logger.error(f"Web directory search failed for {category}: {e}")

@@ -196,29 +196,6 @@ async def download_zip(lead_id: str):
     )
 
 
-@router.get("/leads/{lead_id}/images/{filename}")
-async def serve_lead_image(lead_id: str, filename: str):
-    """Serve an image used by the generated site. The preview HTML references
-    these as relative 'images/<filename>' paths; since /leads/{lead_id}/preview
-    has no trailing slash, the browser resolves that against /leads/{lead_id}/,
-    so this route must live at that exact path for the <img> tags to resolve."""
-    db = get_database()
-    lead = db.get_lead(lead_id)
-    if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
-
-    if not lead.html_path:
-        raise HTTPException(status_code=404, detail="Image not found")
-    images_dir = Path(lead.html_path).parent / "images"
-    for img_path in lead.local_image_paths:
-        if Path(img_path).name == filename:
-            candidate = images_dir / Path(img_path).name
-            if candidate.exists():
-                return FileResponse(path=candidate)
-
-    raise HTTPException(status_code=404, detail="Image not found")
-
-
 @router.get("/leads/{lead_id}/screenshot/{filename}")
 async def serve_screenshot(lead_id: str, filename: str):
     """Serve a screenshot image."""
@@ -233,6 +210,51 @@ async def serve_screenshot(lead_id: str, filename: str):
                 return FileResponse(path=ss_path, media_type="image/png")
 
     raise HTTPException(status_code=404, detail="Screenshot not found")
+
+
+_IMAGE_MEDIA_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+}
+
+
+@router.get("/leads/{lead_id}/images/{filename}")
+async def serve_lead_image(lead_id: str, filename: str):
+    """Serve a source-business/generated-site image referenced by the lead's
+    generated HTML (relative `images/{filename}` paths in index.html resolve
+    here when the HTML is viewed through /preview instead of opened from disk).
+
+    `filename` must be a bare name matching one the lead's own local_image_paths
+    (no path separators or traversal), and the file is only ever read from that
+    lead's own images/ directory — never another lead's, even if two leads
+    happen to save a file with the same generated name.
+    """
+    db = get_database()
+    lead = db.get_lead(lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    # Reject anything that isn't a bare filename before it ever touches the
+    # filesystem — blocks "../" traversal and absolute paths outright.
+    if not filename or Path(filename).name != filename:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    if filename not in lead.local_image_paths:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    settings = get_settings()
+    images_dir = (settings.output_dir / lead.id / "images").resolve()
+    image_path = (images_dir / filename).resolve()
+
+    # Belt-and-suspenders: confirm the resolved path is still inside this
+    # lead's own images directory even after the whitelist check above.
+    if not image_path.is_relative_to(images_dir) or not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    media_type = _IMAGE_MEDIA_TYPES.get(image_path.suffix.lower(), "application/octet-stream")
+    return FileResponse(path=str(image_path), media_type=media_type)
 
 
 @router.post("/leads/send-all", response_class=HTMLResponse)
